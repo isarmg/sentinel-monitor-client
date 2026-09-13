@@ -1,0 +1,17 @@
+format = 1
+product_id = "sentinel-monitor"
+source_roots = ["."]
+
+[foundation]
+platform_generation = 1
+version = "0.8.1"
+
+[[components]]
+id = "client"
+profile = "desktop-client"
+capabilities = ["private-state", "https-delivery", "doctor"]
+
+[components.client_limits]
+max_record_bytes = 1048576
+max_spool_bytes = 0
+max_spool_entries = 0

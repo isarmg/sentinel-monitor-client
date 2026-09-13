@@ -1,0 +1,27 @@
+[package]
+name = "sentinel-client"
+version = "0.3.0"
+edition = "2024"
+rust-version = "1.98"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+anyhow = "1"
+async-trait = "0.1"
+base64 = "0.22"
+chrono = "0.4"
+clap = { version = "4", features = ["derive"] }
+rand = "0.8"
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+sarmg-secure-xml = { git = "https://github.com/isarmg/sarmg-foundation-server.git", rev = "89eafaf171e409e6134fa669b140f615635baf5a", version = "=0.7.6" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha1 = "0.10"
+tokio = { version = "1", features = ["macros", "net", "process", "rt-multi-thread", "signal", "time"] }
+url = "2"
+uuid = { version = "1", features = ["serde", "v4"] }
+zeroize = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,0 +1,17 @@
+{
+  "name": "front-door",
+  "location": "entrance",
+  "manufacturer": "Generic",
+  "model": "RTSP camera",
+  "enabled": true,
+  "storage_mode": "server",
+  "adapter": {
+    "kind": "rtsp",
+    "streams": [
+      { "profile": "main", "url": "rtsp://192.0.2.10/main" },
+      { "profile": "sub", "url": "rtsp://192.0.2.10/sub" }
+    ],
+    "username": "camera-user",
+    "password": "<camera password>"
+  }
+}

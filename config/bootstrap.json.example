@@ -1,0 +1,5 @@
+{
+  "server": "https://sentinel.example.com",
+  "authorization_code": "<instance authorization code>",
+  "name": "camera-edge-01"
+}
