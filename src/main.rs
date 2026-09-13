@@ -330,26 +330,13 @@ async fn camera_command(path: &Path, command: CameraCommand) -> anyhow::Result<(
 }
 
 async fn run(path: &Path) -> anyhow::Result<()> {
-    let state = load_state(path)?;
-    ensure!(
-        !state.cameras.is_empty(),
-        "configure at least one camera before run"
-    );
+    let mut state = load_state(path)?;
     let client = http_client()?;
     let mut children: HashMap<String, Child> = HashMap::new();
     let mut runtime = state
         .cameras
         .iter()
-        .map(|camera| {
-            (
-                camera.id,
-                RuntimeCamera {
-                    resolved: None,
-                    error: None,
-                    retry_at: Instant::now(),
-                },
-            )
-        })
+        .map(|camera| (camera.id, new_runtime_camera()))
         .collect::<HashMap<_, _>>();
     let mut command_results = Vec::new();
     let mut interval = tokio::time::interval(Duration::from_secs(2));
@@ -357,8 +344,13 @@ async fn run(path: &Path) -> anyhow::Result<()> {
         tokio::select! {
             _ = tokio::signal::ctrl_c() => break,
             _ = interval.tick() => {
+                reload_configuration(path, &mut state, &mut runtime, &mut children).await?;
                 reap_children(&mut children, &mut runtime).await;
                 resolve_due_cameras(&client, &state, &mut runtime).await;
+                // Local recording is a data-plane responsibility of this
+                // process. It must start and recover even when the remote
+                // control plane cannot accept a snapshot.
+                reconcile_local_recorders(&state, &runtime, &mut children).await?;
                 let response = match send_snapshot(&client, &state, &runtime, &command_results).await {
                     Ok(response) => response,
                     Err(error) => {
@@ -367,13 +359,88 @@ async fn run(path: &Path) -> anyhow::Result<()> {
                     }
                 };
                 command_results.clear();
-                reconcile_streams(&state, &mut runtime, &response.publish, &mut children).await?;
+                reconcile_publishers(&mut runtime, &response.publish, &mut children).await?;
                 command_results.extend(execute_commands(&runtime, response.commands).await);
             }
         }
     }
     for (_, mut child) in children {
         let _ = child.kill().await;
+    }
+    Ok(())
+}
+
+fn new_runtime_camera() -> RuntimeCamera {
+    RuntimeCamera {
+        resolved: None,
+        error: None,
+        retry_at: Instant::now(),
+    }
+}
+
+fn apply_reloaded_state(
+    current: &mut LocalState,
+    next: LocalState,
+    runtime: &mut HashMap<Uuid, RuntimeCamera>,
+) -> anyhow::Result<HashSet<Uuid>> {
+    ensure!(
+        current.format == next.format
+            && current.server == next.server
+            && current.installation_id == next.installation_id
+            && current.client_id == next.client_id
+            && current.access_token == next.access_token
+            && current.name == next.name,
+        "pairing identity changed while the client was running; restart the client"
+    );
+
+    let current_cameras = current
+        .cameras
+        .iter()
+        .map(|camera| Ok((camera.id, serde_json::to_vec(camera)?)))
+        .collect::<anyhow::Result<HashMap<_, _>>>()?;
+    let next_cameras = next
+        .cameras
+        .iter()
+        .map(|camera| Ok((camera.id, serde_json::to_vec(camera)?)))
+        .collect::<anyhow::Result<HashMap<_, _>>>()?;
+    let changed = current_cameras
+        .keys()
+        .chain(next_cameras.keys())
+        .filter(|id| current_cameras.get(id) != next_cameras.get(id))
+        .copied()
+        .collect::<HashSet<_>>();
+
+    for id in &changed {
+        runtime.remove(id);
+        if next_cameras.contains_key(id) {
+            runtime.insert(*id, new_runtime_camera());
+        }
+    }
+    current.cameras = next.cameras;
+    Ok(changed)
+}
+
+async fn reload_configuration(
+    path: &Path,
+    state: &mut LocalState,
+    runtime: &mut HashMap<Uuid, RuntimeCamera>,
+    children: &mut HashMap<String, Child>,
+) -> anyhow::Result<()> {
+    let changed = apply_reloaded_state(state, load_state(path)?, runtime)?;
+    let stale = children
+        .keys()
+        .filter(|key| {
+            key.split(':')
+                .next()
+                .and_then(|value| Uuid::parse_str(value).ok())
+                .is_some_and(|id| changed.contains(&id))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    for key in stale {
+        if let Some(mut child) = children.remove(&key) {
+            let _ = child.kill().await;
+        }
     }
     Ok(())
 }
@@ -474,8 +541,7 @@ async fn send_snapshot(
     Ok(response)
 }
 
-async fn reconcile_streams(
-    state: &LocalState,
+async fn reconcile_publishers(
     runtime: &mut HashMap<Uuid, RuntimeCamera>,
     grants: &[PublishGrant],
     children: &mut HashMap<String, Child>,
@@ -500,6 +566,7 @@ async fn reconcile_streams(
         if children.contains_key(&key) {
             continue;
         }
+        validate_publish_url(&grant.publish_url)?;
         let source = runtime
             .get(&grant.camera_id)
             .and_then(|runtime| runtime.resolved.as_ref())
@@ -508,6 +575,53 @@ async fn reconcile_streams(
         children.insert(key, spawn_publisher(&source, &grant.publish_url)?);
         if let Some(current) = runtime.get_mut(&grant.camera_id) {
             current.error = None;
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_publish_url(value: &str) -> anyhow::Result<()> {
+    let url = Url::parse(value).context("Server returned an invalid publish URL")?;
+    let jwt_count = url
+        .query_pairs()
+        .filter(|(name, token)| name == "jwt" && !token.is_empty())
+        .count();
+    ensure!(
+        url.scheme() == "rtsps"
+            && url.host_str().is_some()
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.fragment().is_none()
+            && jwt_count == 1,
+        "Server publish URL must be credential-free RTSPS with one scoped media token"
+    );
+    Ok(())
+}
+
+fn desired_local_recorders(state: &LocalState) -> HashSet<String> {
+    state
+        .cameras
+        .iter()
+        .filter(|camera| camera.enabled && matches!(camera.storage_mode, StorageMode::Client))
+        .map(|camera| format!("{}:main:record", camera.id))
+        .collect()
+}
+
+async fn reconcile_local_recorders(
+    state: &LocalState,
+    runtime: &HashMap<Uuid, RuntimeCamera>,
+    children: &mut HashMap<String, Child>,
+) -> anyhow::Result<()> {
+    let desired = desired_local_recorders(state);
+    let stale = children
+        .keys()
+        .filter(|key| key.ends_with(":record") && !desired.contains(*key))
+        .cloned()
+        .collect::<Vec<_>>();
+    for key in stale {
+        if let Some(mut child) = children.remove(&key) {
+            let _ = child.kill().await;
         }
     }
 
@@ -550,6 +664,8 @@ fn spawn_publisher(source: &str, destination: &str) -> anyhow::Result<Child> {
             "rtsp",
             "-rtsp_transport",
             "tcp",
+            "-tls_verify",
+            "1",
             destination,
         ])
         .stdin(Stdio::null())
@@ -767,6 +883,13 @@ fn load_state(path: &Path) -> anyhow::Result<LocalState> {
         state.format == 2 && !state.client_id.is_nil() && state.access_token.len() == 43,
         "config is not the current format"
     );
+    validate_name(&state.name)?;
+    validate_server_origin(&state.server)?;
+    let mut camera_ids = HashSet::new();
+    for camera in &state.cameras {
+        camera.validate()?;
+        ensure!(camera_ids.insert(camera.id), "camera IDs must be unique");
+    }
     Ok(state)
 }
 
@@ -830,6 +953,31 @@ fn recording_root() -> PathBuf {
 mod tests {
     use super::*;
 
+    fn state_with(cameras: Vec<Camera>) -> LocalState {
+        LocalState {
+            format: 2,
+            server: "https://sentinel.example/".to_owned(),
+            installation_id: Uuid::new_v4(),
+            client_id: Uuid::new_v4(),
+            access_token: "a".repeat(43),
+            name: "edge-client".to_owned(),
+            cameras,
+        }
+    }
+
+    fn camera(id: Uuid, name: &str) -> Camera {
+        serde_json::from_value(serde_json::json!({
+            "id": id,
+            "name": name,
+            "storage_mode": "server",
+            "adapter": {
+                "kind": "rtsp",
+                "streams": [{"profile": "main", "url": "rtsp://camera/main"}]
+            }
+        }))
+        .unwrap()
+    }
+
     #[test]
     fn camera_views_never_serialize_secrets() {
         let camera: Camera = serde_json::from_value(serde_json::json!({
@@ -861,5 +1009,69 @@ mod tests {
         assert!(validate_server_origin("https://sentinel.example").is_ok());
         assert!(validate_server_origin("http://192.0.2.1").is_err());
         assert!(validate_server_origin("https://user@sentinel.example").is_err());
+    }
+
+    #[tokio::test]
+    async fn removing_the_last_camera_persists_an_empty_snapshot_source() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.json");
+        let id = Uuid::new_v4();
+        save_state(&path, &state_with(vec![camera(id, "front")])).unwrap();
+
+        camera_command(&path, CameraCommand::Remove { id })
+            .await
+            .unwrap();
+
+        assert!(load_state(&path).unwrap().cameras.is_empty());
+    }
+
+    #[test]
+    fn runtime_reload_adds_changes_and_removes_cameras() {
+        let removed = Uuid::new_v4();
+        let changed = Uuid::new_v4();
+        let added = Uuid::new_v4();
+        let mut current = state_with(vec![camera(removed, "old"), camera(changed, "before")]);
+        let mut next = state_with(vec![camera(changed, "after"), camera(added, "new")]);
+        next.server = current.server.clone();
+        next.installation_id = current.installation_id;
+        next.client_id = current.client_id;
+        next.access_token = current.access_token.clone();
+        next.name = current.name.clone();
+        let mut runtime = HashMap::from([
+            (removed, new_runtime_camera()),
+            (changed, new_runtime_camera()),
+        ]);
+
+        let reloaded = apply_reloaded_state(&mut current, next, &mut runtime).unwrap();
+
+        assert_eq!(reloaded, HashSet::from([removed, changed, added]));
+        assert!(!runtime.contains_key(&removed));
+        assert!(runtime.contains_key(&changed));
+        assert!(runtime.contains_key(&added));
+        assert_eq!(current.cameras.len(), 2);
+    }
+
+    #[test]
+    fn local_recording_plan_does_not_depend_on_server_publish_grants() {
+        let id = Uuid::new_v4();
+        let mut local = camera(id, "offline recorder");
+        local.storage_mode = StorageMode::Client;
+        let state = state_with(vec![local]);
+
+        assert_eq!(
+            desired_local_recorders(&state),
+            HashSet::from([format!("{id}:main:record")])
+        );
+    }
+
+    #[test]
+    fn publish_grants_require_encrypted_scoped_urls() {
+        assert!(validate_publish_url("rtsps://sentinel.example:8322/camera?jwt=token").is_ok());
+        assert!(validate_publish_url("rtsp://sentinel.example:8554/camera?jwt=token").is_err());
+        assert!(
+            validate_publish_url("rtsps://user:password@sentinel.example:8322/camera?jwt=token")
+                .is_err()
+        );
+        assert!(validate_publish_url("rtsps://sentinel.example:8322/camera").is_err());
     }
 }
