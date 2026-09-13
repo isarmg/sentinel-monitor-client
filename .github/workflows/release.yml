@@ -34,7 +34,18 @@ jobs:
       - name: Check out exact tag without credentials
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
+      - name: Verify exact annotated release identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          version="$(sed -n 's/^version = "\([0-9][0-9.]*\)"/\1/p' Cargo.toml | head -n 1)"
+          test "$GITHUB_REF_NAME" = "v${version}"
+          test "$(git cat-file -t "refs/tags/${GITHUB_REF_NAME}")" = tag
+          test "$(git rev-parse "refs/tags/${GITHUB_REF_NAME}^{commit}")" = "$GITHUB_SHA"
+          test -f "docs/releases/${version}.md"
       - name: Install exact Rust toolchain
         run: rustup toolchain install 1.98.0 --profile minimal
       - name: Build release binary
@@ -84,11 +95,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          version="${GITHUB_REF_NAME#v}"
+          notes="docs/releases/${version}.md"
+          test -f "$notes"
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             echo "Refusing to overwrite existing release $GITHUB_REF_NAME" >&2
             exit 1
           fi
           gh release create "$GITHUB_REF_NAME" dist/* \
             --verify-tag \
-            --notes-file docs/releases/0.3.0.md \
+            --notes-file "$notes" \
             --title "Sentinel Client $GITHUB_REF_NAME"
