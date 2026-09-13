@@ -45,6 +45,8 @@ enum CommandKind {
         #[arg(long)]
         input_stdin: bool,
         #[arg(long)]
+        interactive: bool,
+        #[arg(long)]
         replace: bool,
     },
     /// Run camera publishing, local recording and heartbeat reconciliation.
@@ -195,19 +197,26 @@ async fn main() -> anyhow::Result<()> {
     match cli.command {
         CommandKind::Setup {
             input_stdin,
+            interactive,
             replace,
-        } => setup(&cli.config, input_stdin, replace).await,
+        } => setup(&cli.config, input_stdin, interactive, replace).await,
         CommandKind::Run => run(&cli.config).await,
         CommandKind::Status => status(&cli.config),
         CommandKind::Camera { command } => camera_command(&cli.config, command).await,
     }
 }
 
-async fn setup(path: &Path, input_stdin: bool, replace: bool) -> anyhow::Result<()> {
+async fn setup(
+    path: &Path,
+    input_stdin: bool,
+    interactive: bool,
+    replace: bool,
+) -> anyhow::Result<()> {
     ensure!(
-        input_stdin,
-        "setup requires --input-stdin so secrets never appear in arguments"
+        input_stdin ^ interactive,
+        "setup requires exactly one of --interactive or --input-stdin"
     );
+    preflight_media_tools().await?;
     ensure!(
         !path.exists() || replace,
         "this installation is already paired; after Server authorization rotation use setup --replace"
@@ -217,7 +226,15 @@ async fn setup(path: &Path, input_stdin: bool, replace: bool) -> anyhow::Result<
     } else {
         None
     };
-    let input: Zeroizing<SetupInput> = Zeroizing::new(read_stdin_json()?);
+    let input: Zeroizing<SetupInput> = Zeroizing::new(if interactive {
+        SetupInput {
+            server: sarmg_client_cli::prompt("Server HTTPS origin", false)?,
+            authorization_code: sarmg_client_cli::prompt("Authorization code", true)?,
+            name: sarmg_client_cli::prompt("Client name", false)?,
+        }
+    } else {
+        read_stdin_json()?
+    });
     let server = validate_server_origin(&input.server)?;
     validate_name(&input.name)?;
     validate_authorization_code(&input.authorization_code)?;
@@ -250,7 +267,7 @@ async fn setup(path: &Path, input_stdin: bool, replace: bool) -> anyhow::Result<
             && response.access_token.len() == 43,
         "Server returned an incompatible pairing response"
     );
-    let state = LocalState {
+    let mut state = LocalState {
         format: 2,
         server: server.as_str().trim_end_matches('/').into(),
         installation_id,
@@ -260,8 +277,119 @@ async fn setup(path: &Path, input_stdin: bool, replace: bool) -> anyhow::Result<
         cameras: existing.map(|state| state.cameras).unwrap_or_default(),
     };
     save_state(path, &state)?;
-    println!("paired client {}", state.client_id);
+    if interactive {
+        let camera = interactive_camera_setup().await.context(
+            "pairing was committed, but camera configuration is not ready; use camera discover/apply to resume",
+        )?;
+        state.cameras.push(camera);
+        save_state(path, &state)?;
+    }
+    println!(
+        "paired client {}; media tools verified; configured cameras: {}",
+        state.client_id,
+        state.cameras.len()
+    );
     Ok(())
+}
+
+async fn preflight_media_tools() -> anyhow::Result<()> {
+    for tool in ["ffmpeg", "ffprobe"] {
+        let status = Command::new(tool)
+            .arg("-version")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await
+            .with_context(|| format!("{tool} is required in the background service PATH"))?;
+        ensure!(status.success(), "{tool} preflight failed");
+    }
+    Ok(())
+}
+
+async fn interactive_camera_setup() -> anyhow::Result<Camera> {
+    let discovered = onvif::discover(Duration::from_secs(3)).await?;
+    for (index, camera) in discovered.iter().enumerate() {
+        eprintln!(
+            "{}. {} ({})",
+            index + 1,
+            camera.xaddrs.first().unwrap_or(&camera.endpoint),
+            camera.remote_addr
+        );
+    }
+    let selection = sarmg_client_cli::prompt(
+        if discovered.is_empty() {
+            "No ONVIF camera found; enter a manual RTSP main-stream URL"
+        } else {
+            "Select an ONVIF camera number, or enter a manual RTSP main-stream URL"
+        },
+        false,
+    )?;
+    let name = sarmg_client_cli::prompt("Camera name", false)?;
+    let location = sarmg_client_cli::prompt("Camera location (optional)", false)?;
+    let storage_mode = match sarmg_client_cli::prompt(
+        "Recording location [server/client] (default server)",
+        false,
+    )?
+    .as_str()
+    {
+        "" | "server" => StorageMode::Server,
+        "client" => StorageMode::Client,
+        _ => anyhow::bail!("recording location must be server or client"),
+    };
+    let username = sarmg_client_cli::prompt("Camera username (optional)", false)?;
+    let password = sarmg_client_cli::prompt("Camera password (optional)", true)?;
+    let adapter = if let Ok(index) = selection.parse::<usize>() {
+        let selected = discovered
+            .get(
+                index
+                    .checked_sub(1)
+                    .context("camera selection starts at 1")?,
+            )
+            .context("camera selection is outside the discovered list")?;
+        device::AdapterConfig::Onvif {
+            device_service_url: selected
+                .xaddrs
+                .first()
+                .cloned()
+                .unwrap_or_else(|| selected.endpoint.clone()),
+            username: (!username.is_empty()).then_some(username),
+            password: (!password.is_empty()).then_some(password),
+            main_profile_token: None,
+            sub_profile_token: None,
+        }
+    } else {
+        let sub = sarmg_client_cli::prompt("RTSP sub-stream URL (optional)", false)?;
+        let mut streams = vec![device::ConfiguredStream {
+            profile: device::StreamProfile::Main,
+            url: selection,
+        }];
+        if !sub.is_empty() {
+            streams.push(device::ConfiguredStream {
+                profile: device::StreamProfile::Sub,
+                url: sub,
+            });
+        }
+        device::AdapterConfig::Rtsp {
+            streams,
+            username: (!username.is_empty()).then_some(username),
+            password: (!password.is_empty()).then_some(password),
+        }
+    };
+    let camera = Camera {
+        id: Uuid::new_v4(),
+        name,
+        location,
+        manufacturer: None,
+        model: None,
+        enabled: true,
+        storage_mode,
+        adapter,
+    };
+    camera.validate()?;
+    let mut resolved = camera.adapter().resolve(&http_client()?).await?;
+    resolved.probe_streams().await?;
+    Ok(camera)
 }
 
 fn status(path: &Path) -> anyhow::Result<()> {

@@ -15,11 +15,17 @@ Host、Sunshine 与 Sentinel Client 的自动化都只通过 stdin 提交 `{serv
 撤销现有客户端凭据；把新码写入 bootstrap JSON 后运行 `sentinel-client setup --input-stdin --replace` 重新配对。
 
 ```sh
-sudo sentinel-client setup --input-stdin < bootstrap.json
+sudo sentinel-client setup --interactive
+# 自动化仍可使用：sudo sentinel-client setup --input-stdin < bootstrap.json
 sudo sentinel-client camera discover --timeout-seconds 3
 sudo sentinel-client camera apply --input-stdin < camera.json
 sudo sentinel-client run
 ```
+
+交互式 Setup 会先用后台进程相同的 `PATH` 检查 FFmpeg/FFprobe，再配对、执行 ONVIF 发现（也可输入
+手工 RTSP 主/子码流）、保护式读取摄像头密码、选择 `server`/`client` 录像位置，并在保存前用真实
+FFprobe 探测视频流。配对已提交而摄像头探测失败时会明确返回失败并保留身份，之后从
+`camera discover/apply` 继续，不会要求重新配对。
 
 `run` 会在每个协调周期重新读取经过原子替换的配置。运行中执行 `camera apply/remove` 无需重启 Client；
 被删除或改变的摄像头会立即停止对应发布和本地录像进程，并在下一份快照中更新 Server。删除最后一台
