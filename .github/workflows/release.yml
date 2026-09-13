@@ -90,5 +90,5 @@ jobs:
           fi
           gh release create "$GITHUB_REF_NAME" dist/* \
             --verify-tag \
-            --generate-notes \
+            --notes-file docs/releases/0.3.0.md \
             --title "Sentinel Client $GITHUB_REF_NAME"
