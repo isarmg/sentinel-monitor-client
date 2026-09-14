@@ -11,14 +11,16 @@ RTSP URI，并在设备声明 PTZ 能力时执行 Server 下发的统一 PTZ 命
 ## 统一配对
 
 Host、Sunshine 与 Sentinel Client 的自动化都只通过 stdin 提交 `{server,authorization_code,...}`，不把秘密放在
-命令参数或日志中。每个客户端实例拥有一个长期授权码，由 Server 加密保存并可查看。Server 更换实例授权码时会
-撤销现有客户端凭据；把新码写入 bootstrap JSON 后运行 `sentinel-client setup --input-stdin --replace` 重新配对。
+命令参数或日志中。Server 上的每个实例对应一台摄像机并拥有一个长期授权码，由 Server 加密保存并可查看。
+同一个 Client 安装可重复执行 Setup 保存多个授权码，但每个授权码严格只绑定一台摄像机。Server 更换某个实例
+授权码时只撤销该摄像机的凭据；把新码写入 bootstrap JSON 后运行 `sentinel-client setup --input-stdin --replace`
+重新配对该实例。
 
 ```sh
 sudo sentinel-client setup --interactive
 # 自动化仍可使用：sudo sentinel-client setup --input-stdin < bootstrap.json
 sudo sentinel-client camera discover --timeout-seconds 3
-sudo sentinel-client camera apply --input-stdin < camera.json
+sudo sentinel-client camera apply --instance-id <setup 返回的实例 ID> --input-stdin < camera.json
 sudo sentinel-client run
 ```
 
@@ -27,9 +29,9 @@ sudo sentinel-client run
 FFprobe 探测视频流。配对已提交而摄像头探测失败时会明确返回失败并保留身份，之后从
 `camera discover/apply` 继续，不会要求重新配对。
 
-`run` 会在每个协调周期重新读取经过原子替换的配置。运行中执行 `camera apply/remove` 无需重启 Client；
-被删除或改变的摄像头会立即停止对应发布和本地录像进程，并在下一份快照中更新 Server。删除最后一台
-摄像头后 Client 仍保持配对心跳并发送空列表，之后可直接重新添加设备。
+`run` 会在每个协调周期重新读取经过原子替换的配置，并分别使用每个实例凭据上报对应的单台摄像机。运行中
+执行带 `--instance-id` 的 `camera apply/remove` 无需重启 Client；被删除或改变的摄像机配置会立即停止对应发布
+和本地录像进程。未配置摄像机的授权实例不会发送空快照，配置恢复后会继续使用原实例身份上报。
 
 摄像头修改的结果分三层确认：命令成功只证明新配置已原子保存；本地 `run` 读取新 revision 后才证明旧
 FFmpeg 发布/录像进程已停止或新进程已启动；Server 接收下一份快照后才证明远端摄像头集合已更新。Server
@@ -45,7 +47,7 @@ Server 发布授权必须是 `rtsps://`，FFmpeg 会启用对端证书验证；�
 
 配置默认位于 Linux `/etc/isarmg/sentinel-client/config.json`、macOS
 `/Library/Application Support/SentinelClient/config.json`、Windows `%ProgramData%\SentinelClient\config.json`。
-配置包含摄像头和长期 Client 凭据，必须只允许服务账户读取。
+配置包含多个摄像机实例及其长期 Client 凭据，必须只允许服务账户读取。
 
 当前源码在 Linux、Windows 和 macOS 构建；正式安装包与原生服务生命周期仍以对应 Release 的 CI 资产为准。
 判断业务成功不能只看进程运行：至少应在 Client 观察到摄像头探测成功、在 Server 看到当前快照，并从管理页

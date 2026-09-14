@@ -21,7 +21,7 @@ use url::Url;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
-const PROTOCOL: &str = "sentinel-edge-v2";
+const PROTOCOL: &str = "sentinel-edge-v3";
 const PRODUCT: &str = "sentinel-monitor";
 const MAX_INPUT_BYTES: u64 = 1024 * 1024;
 
@@ -64,13 +64,16 @@ enum CommandKind {
 enum CameraCommand {
     /// Add or replace a camera from a protected JSON document on stdin.
     Apply {
+        /// Server camera instance to configure.
+        #[arg(long)]
+        instance_id: Uuid,
         #[arg(long)]
         input_stdin: bool,
     },
     /// List cameras without RTSP URLs or credentials.
     List,
-    /// Remove a local camera; the next snapshot removes it from the Server.
-    Remove { id: Uuid },
+    /// Remove the local camera configuration from one paired instance.
+    Remove { instance_id: Uuid },
     /// Discover standards-compliant ONVIF cameras on the client network.
     Discover {
         #[arg(long, default_value_t = 3, value_parser = clap::value_parser!(u64).range(1..=15))]
@@ -82,12 +85,18 @@ enum CameraCommand {
 #[serde(deny_unknown_fields)]
 struct LocalState {
     format: u32,
-    server: String,
     installation_id: Uuid,
-    client_id: Uuid,
+    instances: Vec<CameraInstance>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CameraInstance {
+    server: String,
+    instance_id: Uuid,
     access_token: String,
     name: String,
-    cameras: Vec<Camera>,
+    camera: Option<Camera>,
 }
 
 #[derive(Deserialize, zeroize::Zeroize)]
@@ -217,14 +226,14 @@ async fn setup(
         "setup requires exactly one of --interactive or --input-stdin"
     );
     preflight_media_tools().await?;
-    ensure!(
-        !path.exists() || replace,
-        "this installation is already paired; after Server authorization rotation use setup --replace"
-    );
-    let existing = if path.exists() {
-        Some(load_state(path)?)
+    let mut state = if path.exists() {
+        load_state(path)?
     } else {
-        None
+        LocalState {
+            format: 3,
+            installation_id: Uuid::new_v4(),
+            instances: Vec::new(),
+        }
     };
     let input: Zeroizing<SetupInput> = Zeroizing::new(if interactive {
         SetupInput {
@@ -238,17 +247,13 @@ async fn setup(
     let server = validate_server_origin(&input.server)?;
     validate_name(&input.name)?;
     validate_authorization_code(&input.authorization_code)?;
-    let installation_id = existing
-        .as_ref()
-        .map(|state| state.installation_id)
-        .unwrap_or_else(Uuid::new_v4);
     let client = http_client()?;
     let response = client
         .post(server.join("/api/v2/client/pair")?)
         .json(&PairRequest {
             protocol: PROTOCOL,
             product: PRODUCT,
-            installation_id,
+            installation_id: state.installation_id,
             name: input.name.trim(),
             client_version: env!("CARGO_PKG_VERSION"),
             authorization_code: &input.authorization_code,
@@ -267,27 +272,50 @@ async fn setup(
             && response.access_token.len() == 43,
         "Server returned an incompatible pairing response"
     );
-    let mut state = LocalState {
-        format: 2,
+    let position = state
+        .instances
+        .iter()
+        .position(|instance| instance.instance_id == response.client_id);
+    ensure!(
+        position.is_none() || replace,
+        "this camera instance is already paired; use setup --replace after changing its Server authorization code"
+    );
+    let preserved_camera = position.and_then(|index| state.instances[index].camera.take());
+    let instance = CameraInstance {
         server: server.as_str().trim_end_matches('/').into(),
-        installation_id,
-        client_id: response.client_id,
+        instance_id: response.client_id,
         access_token: response.access_token,
         name: input.name.trim().into(),
-        cameras: existing.map(|state| state.cameras).unwrap_or_default(),
+        camera: preserved_camera,
     };
+    match position {
+        Some(index) => state.instances[index] = instance,
+        None => {
+            ensure!(state.instances.len() < 256, "camera instance limit reached");
+            state.instances.push(instance);
+        }
+    }
     save_state(path, &state)?;
     if interactive {
-        let camera = interactive_camera_setup().await.context(
-            "pairing was committed, but camera configuration is not ready; use camera discover/apply to resume",
+        let mut camera = interactive_camera_setup().await.context(
+            "pairing was committed, but camera configuration is not ready; use camera apply --instance-id to resume",
         )?;
-        state.cameras.push(camera);
+        camera.id = response.client_id;
+        state
+            .instances
+            .iter_mut()
+            .find(|value| value.instance_id == response.client_id)
+            .expect("newly paired instance is stored")
+            .camera = Some(camera);
         save_state(path, &state)?;
     }
     println!(
-        "paired client {}; media tools verified; configured cameras: {}",
-        state.client_id,
-        state.cameras.len()
+        "paired camera instance {}; media tools verified; configured: {}",
+        response.client_id,
+        state
+            .instances
+            .iter()
+            .any(|value| value.instance_id == response.client_id && value.camera.is_some())
     );
     Ok(())
 }
@@ -398,11 +426,13 @@ fn status(path: &Path) -> anyhow::Result<()> {
         "{}",
         serde_json::to_string_pretty(&serde_json::json!({
             "paired": true,
-            "server": state.server,
-            "client_id": state.client_id,
             "installation_id": state.installation_id,
-            "name": state.name,
-            "cameras": state.cameras.len(),
+            "instances": state.instances.iter().map(|instance| serde_json::json!({
+                "server": instance.server,
+                "instance_id": instance.instance_id,
+                "name": instance.name,
+                "configured": instance.camera.is_some(),
+            })).collect::<Vec<_>>(),
         }))?
     );
     Ok(())
@@ -411,42 +441,48 @@ fn status(path: &Path) -> anyhow::Result<()> {
 async fn camera_command(path: &Path, command: CameraCommand) -> anyhow::Result<()> {
     let mut state = load_state(path)?;
     match command {
-        CameraCommand::Apply { input_stdin } => {
+        CameraCommand::Apply {
+            instance_id,
+            input_stdin,
+        } => {
             ensure!(input_stdin, "camera apply requires --input-stdin");
             let mut camera: Camera = read_stdin_json()?;
             camera.validate()?;
-            if camera.id.is_nil() {
-                camera.id = Uuid::new_v4();
-            }
-            if let Some(existing) = state.cameras.iter_mut().find(|value| value.id == camera.id) {
-                *existing = camera;
-            } else {
-                ensure!(state.cameras.len() < 256, "camera limit reached");
-                state.cameras.push(camera);
-            }
+            camera.id = instance_id;
+            let instance = state
+                .instances
+                .iter_mut()
+                .find(|value| value.instance_id == instance_id)
+                .context("camera instance is not paired")?;
+            instance.camera = Some(camera);
             save_state(path, &state)?;
         }
         CameraCommand::List => {
             let views = state
-                .cameras
+                .instances
                 .iter()
-                .map(|camera| CameraView {
-                    id: camera.id,
-                    name: &camera.name,
-                    location: &camera.location,
-                    adapter_kind: camera.adapter_kind(),
-                    manufacturer: camera.manufacturer.as_deref(),
-                    model: camera.model.as_deref(),
-                    enabled: camera.enabled,
-                    storage_mode: camera.storage_mode.as_str(),
+                .filter_map(|instance| {
+                    instance.camera.as_ref().map(|camera| CameraView {
+                        id: instance.instance_id,
+                        name: &camera.name,
+                        location: &camera.location,
+                        adapter_kind: camera.adapter_kind(),
+                        manufacturer: camera.manufacturer.as_deref(),
+                        model: camera.model.as_deref(),
+                        enabled: camera.enabled,
+                        storage_mode: camera.storage_mode.as_str(),
+                    })
                 })
                 .collect::<Vec<_>>();
             println!("{}", serde_json::to_string_pretty(&views)?);
         }
-        CameraCommand::Remove { id } => {
-            let before = state.cameras.len();
-            state.cameras.retain(|camera| camera.id != id);
-            ensure!(state.cameras.len() != before, "camera not found");
+        CameraCommand::Remove { instance_id } => {
+            let instance = state
+                .instances
+                .iter_mut()
+                .find(|value| value.instance_id == instance_id)
+                .context("camera instance is not paired")?;
+            ensure!(instance.camera.take().is_some(), "camera is not configured");
             save_state(path, &state)?;
         }
         CameraCommand::Discover { timeout_seconds } => {
@@ -462,11 +498,13 @@ async fn run(path: &Path) -> anyhow::Result<()> {
     let client = http_client()?;
     let mut children: HashMap<String, Child> = HashMap::new();
     let mut runtime = state
-        .cameras
+        .instances
         .iter()
+        .filter_map(|instance| instance.camera.as_ref())
         .map(|camera| (camera.id, new_runtime_camera()))
         .collect::<HashMap<_, _>>();
-    let mut command_results = Vec::new();
+    let mut command_results: HashMap<Uuid, Vec<CommandResult>> = HashMap::new();
+    let mut publish_grants: HashMap<Uuid, Vec<PublishGrant>> = HashMap::new();
     let mut interval = tokio::time::interval(Duration::from_secs(2));
     loop {
         tokio::select! {
@@ -479,16 +517,33 @@ async fn run(path: &Path) -> anyhow::Result<()> {
                 // process. It must start and recover even when the remote
                 // control plane cannot accept a snapshot.
                 reconcile_local_recorders(&state, &runtime, &mut children).await?;
-                let response = match send_snapshot(&client, &state, &runtime, &command_results).await {
-                    Ok(response) => response,
-                    Err(error) => {
-                        eprintln!("snapshot failed: {error:#}");
-                        continue;
+                let configured_instances = state.instances.iter()
+                    .filter(|value| value.camera.is_some())
+                    .map(|value| value.instance_id)
+                    .collect::<HashSet<_>>();
+                let grant_count = publish_grants.len();
+                publish_grants.retain(|instance_id, _| configured_instances.contains(instance_id));
+                let mut grants_changed = publish_grants.len() != grant_count;
+                let mut commands = Vec::new();
+                for instance in state.instances.iter().filter(|value| value.camera.is_some()) {
+                    let pending = command_results.get(&instance.instance_id).map(Vec::as_slice).unwrap_or(&[]);
+                    match send_snapshot(&client, instance, &runtime, pending).await {
+                        Ok(response) => {
+                            command_results.remove(&instance.instance_id);
+                            publish_grants.insert(instance.instance_id, response.publish);
+                            grants_changed = true;
+                            commands.extend(response.commands);
+                        }
+                        Err(error) => eprintln!("snapshot failed for instance {}: {error:#}", instance.instance_id),
                     }
-                };
-                command_results.clear();
-                reconcile_publishers(&mut runtime, &response.publish, &mut children).await?;
-                command_results.extend(execute_commands(&runtime, response.commands).await);
+                }
+                if grants_changed {
+                    let grants = publish_grants.values().flatten().cloned().collect::<Vec<_>>();
+                    reconcile_publishers(&mut runtime, &grants, &mut children).await?;
+                }
+                for (instance_id, result) in execute_commands(&runtime, commands).await {
+                    command_results.entry(instance_id).or_default().push(result);
+                }
             }
         }
     }
@@ -512,24 +567,21 @@ fn apply_reloaded_state(
     runtime: &mut HashMap<Uuid, RuntimeCamera>,
 ) -> anyhow::Result<HashSet<Uuid>> {
     ensure!(
-        current.format == next.format
-            && current.server == next.server
-            && current.installation_id == next.installation_id
-            && current.client_id == next.client_id
-            && current.access_token == next.access_token
-            && current.name == next.name,
-        "pairing identity changed while the client was running; restart the client"
+        current.format == next.format && current.installation_id == next.installation_id,
+        "client installation identity changed while the client was running; restart the client"
     );
 
     let current_cameras = current
-        .cameras
+        .instances
         .iter()
-        .map(|camera| Ok((camera.id, serde_json::to_vec(camera)?)))
+        .filter_map(|instance| instance.camera.as_ref().map(|camera| (instance, camera)))
+        .map(|(instance, camera)| Ok((camera.id, serde_json::to_vec(&(instance, camera))?)))
         .collect::<anyhow::Result<HashMap<_, _>>>()?;
     let next_cameras = next
-        .cameras
+        .instances
         .iter()
-        .map(|camera| Ok((camera.id, serde_json::to_vec(camera)?)))
+        .filter_map(|instance| instance.camera.as_ref().map(|camera| (instance, camera)))
+        .map(|(instance, camera)| Ok((camera.id, serde_json::to_vec(&(instance, camera))?)))
         .collect::<anyhow::Result<HashMap<_, _>>>()?;
     let changed = current_cameras
         .keys()
@@ -544,7 +596,7 @@ fn apply_reloaded_state(
             runtime.insert(*id, new_runtime_camera());
         }
     }
-    current.cameras = next.cameras;
+    current.instances = next.instances;
     Ok(changed)
 }
 
@@ -575,80 +627,80 @@ async fn reload_configuration(
 
 async fn send_snapshot(
     client: &reqwest::Client,
-    state: &LocalState,
+    instance: &CameraInstance,
     runtime: &HashMap<Uuid, RuntimeCamera>,
     command_results: &[CommandResult],
 ) -> anyhow::Result<SnapshotResponse> {
-    let cameras = state
-        .cameras
-        .iter()
-        .map(|camera| {
-            let current = runtime.get(&camera.id);
-            let resolved = current.and_then(|current| current.resolved.as_ref());
-            let identity = resolved
-                .map(|device| device.identity.clone())
-                .unwrap_or_else(|| DeviceIdentity {
-                    manufacturer: camera.manufacturer.clone(),
-                    model: camera.model.clone(),
-                    ..DeviceIdentity::default()
-                });
-            let capabilities = resolved
-                .map(|device| device.capabilities.clone())
-                .unwrap_or(DeviceCapabilities {
-                    video: true,
-                    main_stream: true,
-                    sub_stream: false,
-                    local_recording: true,
-                    server_recording: true,
-                    ptz: false,
-                    events: false,
-                    audio_input: false,
-                    audio_output: false,
-                });
-            let streams: Vec<StreamDescriptor> = resolved
-                .map(|device| {
-                    device
-                        .streams
-                        .iter()
-                        .map(|stream| stream.descriptor.clone())
-                        .collect()
-                })
-                .unwrap_or_default();
-            let has_sub_stream = streams
-                .iter()
-                .any(|stream: &StreamDescriptor| stream.profile == "sub");
-            let error = current.and_then(|current| current.error.clone());
-            CameraSnapshot {
-                id: camera.id,
-                name: camera.name.trim().to_owned(),
-                location: camera.location.trim().to_owned(),
-                adapter_kind: resolved.map_or_else(
-                    || camera.adapter_kind().to_owned(),
-                    |device| device.adapter_kind.to_owned(),
-                ),
-                identity,
-                capabilities,
-                streams,
-                has_sub_stream,
-                enabled: camera.enabled,
-                storage_mode: camera.storage_mode.as_str(),
-                status: if !camera.enabled {
-                    "disabled"
-                } else if error.is_some() {
-                    "error"
-                } else if resolved.is_some() {
-                    "online"
-                } else {
-                    "pending"
-                },
-                health_message: error,
-            }
-        })
-        .collect();
-    let url = Url::parse(&state.server)?.join("/api/v2/client/snapshot")?;
+    let camera = instance
+        .camera
+        .as_ref()
+        .context("camera instance is not configured")?;
+    let cameras = vec![{
+        let current = runtime.get(&camera.id);
+        let resolved = current.and_then(|current| current.resolved.as_ref());
+        let identity = resolved
+            .map(|device| device.identity.clone())
+            .unwrap_or_else(|| DeviceIdentity {
+                manufacturer: camera.manufacturer.clone(),
+                model: camera.model.clone(),
+                ..DeviceIdentity::default()
+            });
+        let capabilities = resolved
+            .map(|device| device.capabilities.clone())
+            .unwrap_or(DeviceCapabilities {
+                video: true,
+                main_stream: true,
+                sub_stream: false,
+                local_recording: true,
+                server_recording: true,
+                ptz: false,
+                events: false,
+                audio_input: false,
+                audio_output: false,
+            });
+        let streams: Vec<StreamDescriptor> = resolved
+            .map(|device| {
+                device
+                    .streams
+                    .iter()
+                    .map(|stream| stream.descriptor.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let has_sub_stream = streams
+            .iter()
+            .any(|stream: &StreamDescriptor| stream.profile == "sub");
+        let error = current.and_then(|current| current.error.clone());
+        CameraSnapshot {
+            id: camera.id,
+            name: camera.name.trim().to_owned(),
+            location: camera.location.trim().to_owned(),
+            adapter_kind: resolved.map_or_else(
+                || camera.adapter_kind().to_owned(),
+                |device| device.adapter_kind.to_owned(),
+            ),
+            identity,
+            capabilities,
+            streams,
+            has_sub_stream,
+            enabled: camera.enabled,
+            storage_mode: camera.storage_mode.as_str(),
+            status: if !camera.enabled {
+                "disabled"
+            } else if error.is_some() {
+                "error"
+            } else if resolved.is_some() {
+                "online"
+            } else {
+                "pending"
+            },
+            health_message: error,
+        }
+    }];
+    let url = Url::parse(&instance.server)?.join("/api/v2/client/snapshot")?;
     let response = client
         .put(url)
-        .bearer_auth(&state.access_token)
+        .bearer_auth(&instance.access_token)
         .json(&SnapshotRequest {
             protocol: PROTOCOL,
             cameras,
@@ -729,8 +781,9 @@ fn validate_publish_url(value: &str) -> anyhow::Result<()> {
 
 fn desired_local_recorders(state: &LocalState) -> HashSet<String> {
     state
-        .cameras
+        .instances
         .iter()
+        .filter_map(|instance| instance.camera.as_ref())
         .filter(|camera| camera.enabled && matches!(camera.storage_mode, StorageMode::Client))
         .map(|camera| format!("{}:main:record", camera.id))
         .collect()
@@ -754,8 +807,9 @@ async fn reconcile_local_recorders(
     }
 
     for camera in state
-        .cameras
+        .instances
         .iter()
+        .filter_map(|instance| instance.camera.as_ref())
         .filter(|camera| camera.enabled && matches!(camera.storage_mode, StorageMode::Client))
     {
         let key = format!("{}:main:record", camera.id);
@@ -862,7 +916,12 @@ async fn resolve_due_cameras(
     state: &LocalState,
     runtime: &mut HashMap<Uuid, RuntimeCamera>,
 ) {
-    for camera in state.cameras.iter().filter(|camera| camera.enabled) {
+    for camera in state
+        .instances
+        .iter()
+        .filter_map(|instance| instance.camera.as_ref())
+        .filter(|camera| camera.enabled)
+    {
         let should_resolve = runtime.get(&camera.id).is_some_and(|current| {
             current.resolved.is_none() && Instant::now() >= current.retry_at
         });
@@ -895,7 +954,7 @@ async fn resolve_due_cameras(
 async fn execute_commands(
     runtime: &HashMap<Uuid, RuntimeCamera>,
     commands: Vec<DeviceCommand>,
-) -> Vec<CommandResult> {
+) -> Vec<(Uuid, CommandResult)> {
     let mut results = Vec::with_capacity(commands.len());
     for command in commands {
         let result = match runtime
@@ -911,18 +970,22 @@ async fn execute_commands(
             }
             Some(_) => Err(anyhow::anyhow!("unsupported device command")),
         };
-        results.push(match result {
-            Ok(()) => CommandResult {
-                id: command.id,
-                status: "succeeded",
-                error: None,
+        let camera_id = command.camera_id;
+        results.push((
+            camera_id,
+            match result {
+                Ok(()) => CommandResult {
+                    id: command.id,
+                    status: "succeeded",
+                    error: None,
+                },
+                Err(error) => CommandResult {
+                    id: command.id,
+                    status: "failed",
+                    error: Some(safe_error(&error)),
+                },
             },
-            Err(error) => CommandResult {
-                id: command.id,
-                status: "failed",
-                error: Some(safe_error(&error)),
-            },
-        });
+        ));
     }
     results
 }
@@ -1008,15 +1071,32 @@ fn load_state(path: &Path) -> anyhow::Result<LocalState> {
     );
     let state: LocalState = serde_json::from_slice(&bytes)?;
     ensure!(
-        state.format == 2 && !state.client_id.is_nil() && state.access_token.len() == 43,
+        state.format == 3 && !state.installation_id.is_nil(),
         "config is not the current format"
     );
-    validate_name(&state.name)?;
-    validate_server_origin(&state.server)?;
-    let mut camera_ids = HashSet::new();
-    for camera in &state.cameras {
-        camera.validate()?;
-        ensure!(camera_ids.insert(camera.id), "camera IDs must be unique");
+    ensure!(
+        !state.instances.is_empty() && state.instances.len() <= 256,
+        "config must contain 1-256 camera instances"
+    );
+    let mut instance_ids = HashSet::new();
+    for instance in &state.instances {
+        ensure!(
+            !instance.instance_id.is_nil() && instance.access_token.len() == 43,
+            "camera instance credential is invalid"
+        );
+        ensure!(
+            instance_ids.insert(instance.instance_id),
+            "camera instance IDs must be unique"
+        );
+        validate_name(&instance.name)?;
+        validate_server_origin(&instance.server)?;
+        if let Some(camera) = &instance.camera {
+            camera.validate()?;
+            ensure!(
+                camera.id == instance.instance_id,
+                "each authorization code must bind exactly its own camera ID"
+            );
+        }
     }
     Ok(state)
 }
@@ -1083,13 +1163,18 @@ mod tests {
 
     fn state_with(cameras: Vec<Camera>) -> LocalState {
         LocalState {
-            format: 2,
-            server: "https://sentinel.example/".to_owned(),
+            format: 3,
             installation_id: Uuid::new_v4(),
-            client_id: Uuid::new_v4(),
-            access_token: "a".repeat(43),
-            name: "edge-client".to_owned(),
-            cameras,
+            instances: cameras
+                .into_iter()
+                .map(|camera| CameraInstance {
+                    server: "https://sentinel.example/".to_owned(),
+                    instance_id: camera.id,
+                    access_token: "a".repeat(43),
+                    name: camera.name.clone(),
+                    camera: Some(camera),
+                })
+                .collect(),
         }
     }
 
@@ -1140,17 +1225,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn removing_the_last_camera_persists_an_empty_snapshot_source() {
+    async fn removing_a_camera_keeps_its_paired_instance_slot() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("config.json");
         let id = Uuid::new_v4();
         save_state(&path, &state_with(vec![camera(id, "front")])).unwrap();
 
-        camera_command(&path, CameraCommand::Remove { id })
+        camera_command(&path, CameraCommand::Remove { instance_id: id })
             .await
             .unwrap();
 
-        assert!(load_state(&path).unwrap().cameras.is_empty());
+        let state = load_state(&path).unwrap();
+        assert_eq!(state.instances.len(), 1);
+        assert!(state.instances[0].camera.is_none());
     }
 
     #[test]
@@ -1160,11 +1247,7 @@ mod tests {
         let added = Uuid::new_v4();
         let mut current = state_with(vec![camera(removed, "old"), camera(changed, "before")]);
         let mut next = state_with(vec![camera(changed, "after"), camera(added, "new")]);
-        next.server = current.server.clone();
         next.installation_id = current.installation_id;
-        next.client_id = current.client_id;
-        next.access_token = current.access_token.clone();
-        next.name = current.name.clone();
         let mut runtime = HashMap::from([
             (removed, new_runtime_camera()),
             (changed, new_runtime_camera()),
@@ -1176,7 +1259,7 @@ mod tests {
         assert!(!runtime.contains_key(&removed));
         assert!(runtime.contains_key(&changed));
         assert!(runtime.contains_key(&added));
-        assert_eq!(current.cameras.len(), 2);
+        assert_eq!(current.instances.len(), 2);
     }
 
     #[test]
