@@ -247,7 +247,7 @@ async fn setup(
     let server = validate_server_origin(&input.server)?;
     validate_name(&input.name)?;
     validate_authorization_code(&input.authorization_code)?;
-    let client = http_client()?;
+    let client = server_client()?;
     let response = client
         .post(server.join("/api/v2/client/pair")?)
         .json(&PairRequest {
@@ -415,7 +415,7 @@ async fn interactive_camera_setup() -> anyhow::Result<Camera> {
         adapter,
     };
     camera.validate()?;
-    let mut resolved = camera.adapter().resolve(&http_client()?).await?;
+    let mut resolved = camera.adapter().resolve(&device_client()?).await?;
     resolved.probe_streams().await?;
     Ok(camera)
 }
@@ -495,7 +495,8 @@ async fn camera_command(path: &Path, command: CameraCommand) -> anyhow::Result<(
 
 async fn run(path: &Path) -> anyhow::Result<()> {
     let mut state = load_state(path)?;
-    let client = http_client()?;
+    let server_client = server_client()?;
+    let device_client = device_client()?;
     let mut children: HashMap<String, Child> = HashMap::new();
     let mut runtime = state
         .instances
@@ -512,7 +513,7 @@ async fn run(path: &Path) -> anyhow::Result<()> {
             _ = interval.tick() => {
                 reload_configuration(path, &mut state, &mut runtime, &mut children).await?;
                 reap_children(&mut children, &mut runtime).await;
-                resolve_due_cameras(&client, &state, &mut runtime).await;
+                resolve_due_cameras(&device_client, &state, &mut runtime).await;
                 // Local recording is a data-plane responsibility of this
                 // process. It must start and recover even when the remote
                 // control plane cannot accept a snapshot.
@@ -527,7 +528,7 @@ async fn run(path: &Path) -> anyhow::Result<()> {
                 let mut commands = Vec::new();
                 for instance in state.instances.iter().filter(|value| value.camera.is_some()) {
                     let pending = command_results.get(&instance.instance_id).map(Vec::as_slice).unwrap_or(&[]);
-                    match send_snapshot(&client, instance, &runtime, pending).await {
+                    match send_snapshot(&server_client, instance, &runtime, pending).await {
                         Ok(response) => {
                             command_results.remove(&instance.instance_id);
                             publish_grants.insert(instance.instance_id, response.publish);
@@ -1038,10 +1039,21 @@ fn validate_server_origin(value: &str) -> anyhow::Result<Url> {
     Ok(url)
 }
 
-fn http_client() -> anyhow::Result<reqwest::Client> {
+fn server_client() -> anyhow::Result<reqwest::Client> {
     Ok(reqwest::Client::builder()
         .timeout(Duration::from_secs(20))
+        .connect_timeout(Duration::from_secs(10))
         .redirect(reqwest::redirect::Policy::none())
+        .user_agent(concat!("sentinel-client/", env!("CARGO_PKG_VERSION")))
+        .build()?)
+}
+
+fn device_client() -> anyhow::Result<reqwest::Client> {
+    Ok(reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .connect_timeout(Duration::from_secs(10))
+        .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
         .user_agent(concat!("sentinel-client/", env!("CARGO_PKG_VERSION")))
         .build()?)
 }
