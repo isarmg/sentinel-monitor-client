@@ -172,6 +172,7 @@ struct DeviceCommand {
     camera_id: Uuid,
     kind: String,
     payload: Value,
+    expires_at: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -506,6 +507,7 @@ async fn run(path: &Path) -> anyhow::Result<()> {
         .collect::<HashMap<_, _>>();
     let mut command_results: HashMap<Uuid, Vec<CommandResult>> = HashMap::new();
     let mut publish_grants: HashMap<Uuid, Vec<PublishGrant>> = HashMap::new();
+    let mut completed_commands: HashMap<Uuid, CommandResult> = HashMap::new();
     let mut interval = tokio::time::interval(Duration::from_secs(2));
     loop {
         tokio::select! {
@@ -542,7 +544,7 @@ async fn run(path: &Path) -> anyhow::Result<()> {
                     let grants = publish_grants.values().flatten().cloned().collect::<Vec<_>>();
                     reconcile_publishers(&mut runtime, &grants, &mut children).await?;
                 }
-                for (instance_id, result) in execute_commands(&runtime, commands).await {
+                for (instance_id, result) in execute_commands(&runtime, commands, &mut completed_commands).await {
                     command_results.entry(instance_id).or_default().push(result);
                 }
             }
@@ -955,9 +957,26 @@ async fn resolve_due_cameras(
 async fn execute_commands(
     runtime: &HashMap<Uuid, RuntimeCamera>,
     commands: Vec<DeviceCommand>,
+    completed: &mut HashMap<Uuid, CommandResult>,
 ) -> Vec<(Uuid, CommandResult)> {
     let mut results = Vec::with_capacity(commands.len());
     for command in commands {
+        if let Some(result) = completed.get(&command.id) {
+            results.push((command.camera_id, result.clone()));
+            continue;
+        }
+        let expires_at = chrono::DateTime::parse_from_rfc3339(&command.expires_at)
+            .map(|value| value.with_timezone(&chrono::Utc));
+        if expires_at.is_err() || expires_at.is_ok_and(|value| value <= chrono::Utc::now()) {
+            let result = CommandResult {
+                id: command.id,
+                status: "failed",
+                error: Some("command expired before execution".into()),
+            };
+            completed.insert(command.id, result.clone());
+            results.push((command.camera_id, result));
+            continue;
+        }
         let result = match runtime
             .get(&command.camera_id)
             .and_then(|runtime| runtime.resolved.as_ref())
@@ -972,7 +991,7 @@ async fn execute_commands(
             Some(_) => Err(anyhow::anyhow!("unsupported device command")),
         };
         let camera_id = command.camera_id;
-        results.push((
+        let outcome = (
             camera_id,
             match result {
                 Ok(()) => CommandResult {
@@ -986,7 +1005,9 @@ async fn execute_commands(
                     error: Some(safe_error(&error)),
                 },
             },
-        ));
+        );
+        completed.insert(outcome.1.id, outcome.1.clone());
+        results.push(outcome);
     }
     results
 }
