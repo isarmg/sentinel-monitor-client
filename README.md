@@ -1,5 +1,7 @@
 # Sentinel Monitor Client
 
+当前源码版本为 `0.3.5`，使用 Client Foundation `0.9.13` 的原生有界终端输入；Sentinel 配对协议、摄像头状态和恢复文案由本仓负责。
+
 `sentinel-client` 是多品牌摄像头边缘管理客户端。品牌和设备差异由 Client 的适配器吸收，Server 只接收统一的
 设备身份、能力、主/子码流、健康状态和命令结果。摄像头 RTSP/ONVIF 凭据仅保存在客户端受保护配置中；客户端与
 Sentinel Server 配对后，把实时主/子码流发布到 Server 的 MediaMTX，因此两种录像策略都能在管理页查看实时画面。

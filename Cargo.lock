@@ -882,6 +882,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "quick-xml"
+version = "0.38.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b66c2058c55a409d601666cffe35f04333cf1013010882cec174a7467cd4e21c"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
 name = "quinn"
 version = "0.11.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1186,8 +1195,8 @@ dependencies = [
 
 [[package]]
 name = "sarmg-client-cli"
-version = "0.9.10"
-source = "git+https://github.com/isarmg/sarmg-foundation-client.git?rev=c081f5c3b5d5f6e74f029d03dd7d98cb5d88a456#c081f5c3b5d5f6e74f029d03dd7d98cb5d88a456"
+version = "0.9.13"
+source = "git+https://github.com/isarmg/sarmg-foundation-client.git?rev=995331aa56a9373df0eb090d017532273f00d6ac#995331aa56a9373df0eb090d017532273f00d6ac"
 dependencies = [
  "libc",
  "serde",
@@ -1201,9 +1210,10 @@ dependencies = [
 
 [[package]]
 name = "sarmg-secure-xml"
-version = "0.7.6"
-source = "git+https://github.com/isarmg/sarmg-foundation-server.git?rev=89eafaf171e409e6134fa669b140f615635baf5a#89eafaf171e409e6134fa669b140f615635baf5a"
+version = "0.9.13"
+source = "git+https://github.com/isarmg/sarmg-foundation-client.git?rev=995331aa56a9373df0eb090d017532273f00d6ac#995331aa56a9373df0eb090d017532273f00d6ac"
 dependencies = [
+ "quick-xml",
  "roxmltree",
  "thiserror",
 ]
@@ -1248,7 +1258,7 @@ checksum = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
 
 [[package]]
 name = "sentinel-client"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "anyhow",
  "async-trait",
