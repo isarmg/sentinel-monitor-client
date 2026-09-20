@@ -24,6 +24,14 @@ use zeroize::Zeroizing;
 const PROTOCOL: &str = "sentinel-edge-v3";
 const PRODUCT: &str = "sentinel-monitor";
 const MAX_INPUT_BYTES: u64 = 1024 * 1024;
+const MAX_URL_BYTES: usize = 4_096;
+const MAX_AUTHORIZATION_CODE_BYTES: usize = 64;
+const MAX_NAME_BYTES: usize = 256;
+const MAX_LOCATION_BYTES: usize = 512;
+const MAX_USERNAME_BYTES: usize = 256;
+const MAX_PASSWORD_BYTES: usize = 4_096;
+const MAX_STORAGE_MODE_BYTES: usize = 16;
+const MAX_PAIRING_RESPONSE_BYTES: usize = 16 * 1024;
 
 #[derive(Parser)]
 #[command(
@@ -48,6 +56,9 @@ enum CommandKind {
         interactive: bool,
         #[arg(long)]
         replace: bool,
+        /// Maximum time for the complete interactive input sequence.
+        #[arg(long, default_value_t = 300, value_parser = clap::value_parser!(u64).range(1..=3600))]
+        timeout_seconds: u64,
     },
     /// Run camera publishing, local recording and heartbeat reconciliation.
     Run,
@@ -123,6 +134,46 @@ struct PairResponse {
     protocol: String,
     client_id: Uuid,
     access_token: String,
+}
+
+#[derive(Deserialize)]
+struct ServerErrorCode {
+    code: String,
+}
+
+fn pairing_error_code(status: reqwest::StatusCode, body: &[u8]) -> &'static str {
+    if serde_json::from_slice::<ServerErrorCode>(body)
+        .is_ok_and(|error| error.code == "unsupported_client_protocol")
+    {
+        return "pairing_protocol_unsupported";
+    }
+    match status.as_u16() {
+        401 | 403 => "pairing_authorization_rejected",
+        404 => "pairing_endpoint_not_found",
+        405 => "pairing_http_method_rejected",
+        406 | 426 => "pairing_server_upgrade_required",
+        408 | 429 | 500..=599 => "pairing_server_unavailable",
+        400..=499 => "pairing_request_rejected",
+        _ => "pairing_unexpected_http_status",
+    }
+}
+
+async fn parse_pairing_response(mut response: reqwest::Response) -> anyhow::Result<PairResponse> {
+    let status = response.status();
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.context("read pairing response")? {
+        ensure!(
+            body.len()
+                .checked_add(chunk.len())
+                .is_some_and(|size| size <= MAX_PAIRING_RESPONSE_BYTES),
+            "pairing_response_too_large"
+        );
+        body.extend_from_slice(&chunk);
+    }
+    if status.is_success() {
+        return serde_json::from_slice(&body).context("invalid pairing response");
+    }
+    anyhow::bail!(pairing_error_code(status, &body))
 }
 
 #[derive(Serialize)]
@@ -209,7 +260,17 @@ async fn main() -> anyhow::Result<()> {
             input_stdin,
             interactive,
             replace,
-        } => setup(&cli.config, input_stdin, interactive, replace).await,
+            timeout_seconds,
+        } => {
+            setup(
+                &cli.config,
+                input_stdin,
+                interactive,
+                replace,
+                timeout_seconds,
+            )
+            .await
+        }
         CommandKind::Run => run(&cli.config).await,
         CommandKind::Status => status(&cli.config),
         CommandKind::Camera { command } => camera_command(&cli.config, command).await,
@@ -221,6 +282,7 @@ async fn setup(
     input_stdin: bool,
     interactive: bool,
     replace: bool,
+    timeout_seconds: u64,
 ) -> anyhow::Result<()> {
     ensure!(
         input_stdin ^ interactive,
@@ -236,11 +298,21 @@ async fn setup(
             instances: Vec::new(),
         }
     };
+    let input_deadline = Instant::now() + Duration::from_secs(timeout_seconds);
     let input: Zeroizing<SetupInput> = Zeroizing::new(if interactive {
         SetupInput {
-            server: sarmg_client_cli::prompt("Server HTTPS origin", false)?,
-            authorization_code: sarmg_client_cli::prompt("Authorization code", true)?,
-            name: sarmg_client_cli::prompt("Client name", false)?,
+            server: sarmg_client_cli::prompt_text(
+                "Server HTTPS origin",
+                MAX_URL_BYTES,
+                input_deadline,
+            )?,
+            authorization_code: sarmg_client_cli::prompt_secret(
+                "Authorization code",
+                MAX_AUTHORIZATION_CODE_BYTES,
+                input_deadline,
+            )?
+            .to_string(),
+            name: sarmg_client_cli::prompt_text("Client name", MAX_NAME_BYTES, input_deadline)?,
         }
     } else {
         read_stdin_json()?
@@ -261,12 +333,8 @@ async fn setup(
         })
         .send()
         .await
-        .context("pairing request failed")?
-        .error_for_status()
-        .context("pairing was rejected")?
-        .json::<PairResponse>()
-        .await
-        .context("invalid pairing response")?;
+        .context("pairing request failed")?;
+    let response = parse_pairing_response(response).await?;
     ensure!(
         response.protocol == PROTOCOL
             && !response.client_id.is_nil()
@@ -298,7 +366,7 @@ async fn setup(
     }
     save_state(path, &state)?;
     if interactive {
-        let mut camera = interactive_camera_setup().await.context(
+        let mut camera = interactive_camera_setup(input_deadline).await.context(
             "pairing was committed, but camera configuration is not ready; use camera apply --instance-id to resume",
         )?;
         camera.id = response.client_id;
@@ -336,7 +404,7 @@ async fn preflight_media_tools() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn interactive_camera_setup() -> anyhow::Result<Camera> {
+async fn interactive_camera_setup(deadline: Instant) -> anyhow::Result<Camera> {
     let discovered = onvif::discover(Duration::from_secs(3)).await?;
     for (index, camera) in discovered.iter().enumerate() {
         eprintln!(
@@ -346,19 +414,22 @@ async fn interactive_camera_setup() -> anyhow::Result<Camera> {
             camera.remote_addr
         );
     }
-    let selection = sarmg_client_cli::prompt(
+    let selection = sarmg_client_cli::prompt_text(
         if discovered.is_empty() {
             "No ONVIF camera found; enter a manual RTSP main-stream URL"
         } else {
             "Select an ONVIF camera number, or enter a manual RTSP main-stream URL"
         },
-        false,
+        MAX_URL_BYTES,
+        deadline,
     )?;
-    let name = sarmg_client_cli::prompt("Camera name", false)?;
-    let location = sarmg_client_cli::prompt("Camera location (optional)", false)?;
-    let storage_mode = match sarmg_client_cli::prompt(
+    let name = sarmg_client_cli::prompt_text("Camera name", MAX_NAME_BYTES, deadline)?;
+    let location =
+        sarmg_client_cli::prompt_text("Camera location (optional)", MAX_LOCATION_BYTES, deadline)?;
+    let storage_mode = match sarmg_client_cli::prompt_text(
         "Recording location [server/client] (default server)",
-        false,
+        MAX_STORAGE_MODE_BYTES,
+        deadline,
     )?
     .as_str()
     {
@@ -366,8 +437,14 @@ async fn interactive_camera_setup() -> anyhow::Result<Camera> {
         "client" => StorageMode::Client,
         _ => anyhow::bail!("recording location must be server or client"),
     };
-    let username = sarmg_client_cli::prompt("Camera username (optional)", false)?;
-    let password = sarmg_client_cli::prompt("Camera password (optional)", true)?;
+    let username =
+        sarmg_client_cli::prompt_text("Camera username (optional)", MAX_USERNAME_BYTES, deadline)?;
+    let password = sarmg_client_cli::prompt_secret(
+        "Camera password (optional)",
+        MAX_PASSWORD_BYTES,
+        deadline,
+    )?
+    .to_string();
     let adapter = if let Ok(index) = selection.parse::<usize>() {
         let selected = discovered
             .get(
@@ -388,7 +465,11 @@ async fn interactive_camera_setup() -> anyhow::Result<Camera> {
             sub_profile_token: None,
         }
     } else {
-        let sub = sarmg_client_cli::prompt("RTSP sub-stream URL (optional)", false)?;
+        let sub = sarmg_client_cli::prompt_text(
+            "RTSP sub-stream URL (optional)",
+            MAX_URL_BYTES,
+            deadline,
+        )?;
         let mut streams = vec![device::ConfiguredStream {
             profile: device::StreamProfile::Main,
             url: selection,
@@ -1255,6 +1336,37 @@ mod tests {
         assert!(validate_server_origin("https://sentinel.example").is_ok());
         assert!(validate_server_origin("http://192.0.2.1").is_err());
         assert!(validate_server_origin("https://user@sentinel.example").is_err());
+    }
+
+    #[test]
+    fn pairing_http_errors_keep_protocol_mismatch_distinct() {
+        use reqwest::StatusCode;
+        assert_eq!(
+            pairing_error_code(StatusCode::NOT_FOUND, b"{}"),
+            "pairing_endpoint_not_found"
+        );
+        assert_eq!(
+            pairing_error_code(StatusCode::METHOD_NOT_ALLOWED, b"{}"),
+            "pairing_http_method_rejected"
+        );
+        assert_eq!(
+            pairing_error_code(StatusCode::UPGRADE_REQUIRED, b"{}"),
+            "pairing_server_upgrade_required"
+        );
+        assert_eq!(
+            pairing_error_code(
+                StatusCode::BAD_REQUEST,
+                br#"{"code":"other","message":"authorization-secret"}"#
+            ),
+            "pairing_request_rejected"
+        );
+        assert_eq!(
+            pairing_error_code(
+                StatusCode::BAD_REQUEST,
+                br#"{"code":"unsupported_client_protocol"}"#
+            ),
+            "pairing_protocol_unsupported"
+        );
     }
 
     #[tokio::test]
