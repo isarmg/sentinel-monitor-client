@@ -12,6 +12,9 @@ ns = {
 ui = tree.find(".//ui:WixUI", ns)
 assert ui is not None and ui.attrib["Id"] == "WixUI_FeatureTree"
 assert ui.attrib["InstallDirectory"] == "INSTALLFOLDER"
+major_upgrade = tree.find(".//w:MajorUpgrade", ns)
+assert major_upgrade is not None
+assert "AllowSameVersionUpgrades" not in major_upgrade.attrib
 install_location = tree.find('.//w:RegistryValue[@Name="InstallLocation"]', ns)
 assert install_location is not None and install_location.attrib["Value"] == "[INSTALLFOLDER]"
 features = {item.attrib["Id"]: item for item in tree.findall(".//w:Feature", ns)}
