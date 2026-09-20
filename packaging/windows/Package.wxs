@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+  <Package
+    UpgradeCode="7D80BAE4-B047-4C28-A890-C5DF330CB61C"
+    Name="Sentinel Client"
+    Manufacturer="sarmg"
+    Version="$(var.ProductVersion)"
+    Scope="perMachine"
+    InstallerVersion="500">
+    <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer Sentinel Client is installed." Schedule="afterInstallInitialize" />
+    <MediaTemplate EmbedCab="yes" />
+    <Launch Condition="VersionNT64" Message="Sentinel Client requires 64-bit Windows." />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/isarmg/sentinel-monitor-client" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+    <ui:WixUI Id="WixUI_FeatureTree" InstallDirectory="INSTALLFOLDER" />
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseRtf)" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="SentinelClient">
+        <Component Id="ClientProgram" Guid="5DC4202D-5451-4683-8FDC-35D4AC24B8FB" Bitness="always64">
+          <File Id="ClientExe" Source="$(var.ClientExe)" Name="sentinel-client.exe" KeyPath="yes" />
+          <Environment Id="SentinelClientMachinePath" Name="PATH" Value="[INSTALLFOLDER]" Action="set" Part="last" Permanent="no" System="yes" />
+          <RegistryValue Root="HKLM" Key="Software\sarmg\Sentinel Client" Name="InstallLocation" Type="string" Value="[INSTALLFOLDER]" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="CommonAppDataFolder">
+      <Directory Id="SentinelStateDirectory" Name="SentinelClient">
+        <Component Id="PreserveConfigurationSelection" Guid="3A3B8E32-D332-45EC-B828-DDE586B42F65" Bitness="always64">
+          <RegistryValue Root="HKLM" Key="Software\sarmg\Sentinel Client" Name="PreserveConfiguration" Type="integer" Value="1" KeyPath="yes" />
+        </Component>
+        <Component Id="PreserveDataSelection" Guid="C614912E-694A-4737-9528-935340981141" Bitness="always64">
+          <RegistryValue Root="HKLM" Key="Software\sarmg\Sentinel Client" Name="PreserveData" Type="integer" Value="1" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="Complete" Title="Sentinel Client program" Description="Install the Sentinel camera edge client." Level="1" AllowAbsent="no" Display="expand">
+      <ComponentRef Id="ClientProgram" />
+      <Feature Id="PreserveConfiguration" Title="Retain existing configuration" Description="Keep the existing pairing and camera configuration. Deselect to remove it and pair/configure again." Level="1" AllowAbsent="yes">
+        <ComponentRef Id="PreserveConfigurationSelection" />
+      </Feature>
+      <Feature Id="PreserveData" Title="Retain existing recording data" Description="Keep all existing local MP4 recordings. Deselect to validate and permanently remove them." Level="1" AllowAbsent="yes">
+        <ComponentRef Id="PreserveDataSelection" />
+      </Feature>
+    </Feature>
+
+    <CustomAction Id="ResetOldConfiguration" FileRef="ClientExe" ExeCommand="installer-reset --configuration" Execute="deferred" Impersonate="no" Return="check" />
+    <CustomAction Id="ResetOldData" FileRef="ClientExe" ExeCommand="installer-reset --data" Execute="deferred" Impersonate="no" Return="check" />
+    <InstallExecuteSequence>
+      <Custom Action="ResetOldConfiguration" After="InstallFiles" Condition="NOT Installed AND &amp;PreserveConfiguration &lt;&gt; 3" />
+      <Custom Action="ResetOldData" After="ResetOldConfiguration" Condition="NOT Installed AND &amp;PreserveData &lt;&gt; 3" />
+    </InstallExecuteSequence>
+  </Package>
+</Wix>

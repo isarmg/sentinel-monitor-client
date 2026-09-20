@@ -1,6 +1,6 @@
 # Sentinel Monitor Client 配置指南
 
-本文适用于 `sentinel-client` `0.3.5`，按实际 CLI 说明实例配对、RTSP/ONVIF 摄像头配置、更新和验证。
+本文适用于 `sentinel-client` `0.3.6`，按实际 CLI 说明实例配对、RTSP/ONVIF 摄像头配置、更新和验证。
 
 ## 1. 前置条件
 
@@ -20,6 +20,10 @@ sentinel-client --version
 | macOS | `/Library/Application Support/SentinelClient/config.json` |
 | Windows | `%ProgramData%\SentinelClient\config.json` |
 
+Windows Release 同时提供 MSI。交互安装的自定义页允许修改程序目录，并分别选择是否保留上述配置/配对信息、是否保留
+`%ProgramData%\SentinelClient\recordings`；两项默认保留，取消选择会在安全检查后永久清理对应类别。安装结束会停留在明确的完成页或失败页。自定义安装路径可从
+`HKLM\Software\sarmg\Sentinel Client` 的 `InstallLocation` 读取。
+
 其他路径可用全局参数指定：
 
 ```sh
@@ -27,6 +31,12 @@ sentinel-client --config /absolute/path/config.json status
 ```
 
 配置包含长期 Client token、摄像头 URL 和可选密码，只允许管理员及服务账号读取。不要直接编辑其身份、format 或实例 ID。
+
+升级会区分账户配置和重要录像数据。旧版、损坏或未知的账户/配对文档返回
+`pairing_state_incompatible`；创建新的 Server 授权码后，显式运行
+`sentinel-client setup --interactive --replace`，Client 会先原样归档旧文档，再提交新配对。当前格式中的摄像头配置错误返回
+`configuration_state_incompatible`，不会被 `--replace` 当作账户数据清除。本地录像目录如果包含旧布局、链接、非 MP4 文件或不可读内容，返回
+`important_state_incompatible` 并保留全部内容，必须先用兼容版本导出或由管理员核实后处理。
 
 ## 2. 创建实例并配对
 

@@ -69,6 +69,14 @@ enum CommandKind {
         #[command(subcommand)]
         command: CameraCommand,
     },
+    /// Installer-only removal of explicitly deselected legacy state.
+    #[command(hide = true)]
+    InstallerReset {
+        #[arg(long)]
+        configuration: bool,
+        #[arg(long)]
+        data: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -274,7 +282,86 @@ async fn main() -> anyhow::Result<()> {
         CommandKind::Run => run(&cli.config).await,
         CommandKind::Status => status(&cli.config),
         CommandKind::Camera { command } => camera_command(&cli.config, command).await,
+        CommandKind::InstallerReset {
+            configuration,
+            data,
+        } => installer_reset(&cli.config, configuration, data),
     }
+}
+
+fn installer_reset(path: &Path, configuration: bool, data: bool) -> anyhow::Result<()> {
+    ensure!(
+        configuration ^ data,
+        "installer-reset requires exactly one of --configuration or --data"
+    );
+    ensure!(
+        path == default_config_path(),
+        "installer-reset accepts only the platform default state path"
+    );
+    if configuration {
+        match fs::symlink_metadata(path) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error).context("inspect old Sentinel configuration"),
+            Ok(metadata) => {
+                ensure!(
+                    metadata.is_file() && !metadata.file_type().is_symlink(),
+                    "configuration_state_incompatible: refusing to remove a config path that is not a regular non-symlink file"
+                );
+                fs::remove_file(path).context("remove old Sentinel configuration")?;
+            }
+        }
+        println!("old Sentinel configuration was not retained");
+    } else {
+        let root = recording_root();
+        validate_removable_tree(&root)?;
+        match fs::remove_dir_all(&root) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error).context("remove old Sentinel recordings"),
+        }
+        println!("old Sentinel recordings were not retained");
+    }
+    Ok(())
+}
+
+fn validate_removable_tree(root: &Path) -> anyhow::Result<()> {
+    let metadata = match fs::symlink_metadata(root) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error).context("inspect installer data reset target"),
+    };
+    ensure!(
+        metadata.is_dir() && !metadata.file_type().is_symlink(),
+        "installer data reset target is not a regular non-symlink directory"
+    );
+    let mut pending = vec![root.to_path_buf()];
+    let mut entries = 0usize;
+    while let Some(directory) = pending.pop() {
+        for entry in fs::read_dir(&directory)? {
+            let entry = entry?;
+            entries = entries
+                .checked_add(1)
+                .context("installer data entry count overflow")?;
+            ensure!(
+                entries <= 100_000,
+                "installer data exceeds the 100000-entry safety limit"
+            );
+            let metadata = fs::symlink_metadata(entry.path())?;
+            ensure!(
+                !metadata.file_type().is_symlink(),
+                "installer data contains a symbolic link or junction"
+            );
+            if metadata.is_dir() {
+                pending.push(entry.path());
+            } else {
+                ensure!(
+                    metadata.is_file(),
+                    "installer data contains an unsupported file type"
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 async fn setup(
@@ -289,14 +376,29 @@ async fn setup(
         "setup requires exactly one of --interactive or --input-stdin"
     );
     preflight_media_tools().await?;
-    let mut state = if path.exists() {
-        load_state(path)?
-    } else {
-        LocalState {
-            format: 3,
-            installation_id: Uuid::new_v4(),
-            instances: Vec::new(),
+    validate_recording_store(&recording_root())?;
+    let (mut state, recover_incompatible_pairing) = if path.exists() {
+        match load_state(path) {
+            Ok(state) => (state, false),
+            Err(error) if replace && is_pairing_state_incompatible(&error) => (
+                LocalState {
+                    format: 3,
+                    installation_id: Uuid::new_v4(),
+                    instances: Vec::new(),
+                },
+                true,
+            ),
+            Err(error) => return Err(error),
         }
+    } else {
+        (
+            LocalState {
+                format: 3,
+                installation_id: Uuid::new_v4(),
+                instances: Vec::new(),
+            },
+            false,
+        )
     };
     let input_deadline = Instant::now() + Duration::from_secs(timeout_seconds);
     let input: Zeroizing<SetupInput> = Zeroizing::new(if interactive {
@@ -364,7 +466,12 @@ async fn setup(
             state.instances.push(instance);
         }
     }
-    save_state(path, &state)?;
+    let archived_state = if recover_incompatible_pairing {
+        Some(replace_incompatible_pairing_state(path, &state)?)
+    } else {
+        save_state(path, &state)?;
+        None
+    };
     if interactive {
         let mut camera = interactive_camera_setup(input_deadline).await.context(
             "pairing was committed, but camera configuration is not ready; use camera apply --instance-id to resume",
@@ -386,6 +493,12 @@ async fn setup(
             .iter()
             .any(|value| value.instance_id == response.client_id && value.camera.is_some())
     );
+    if let Some(archive) = archived_state {
+        println!(
+            "incompatible pairing state was preserved at {}; re-pairing completed",
+            archive.display()
+        );
+    }
     Ok(())
 }
 
@@ -503,6 +616,7 @@ async fn interactive_camera_setup(deadline: Instant) -> anyhow::Result<Camera> {
 }
 
 fn status(path: &Path) -> anyhow::Result<()> {
+    validate_recording_store(&recording_root())?;
     let state = load_state(path)?;
     println!(
         "{}",
@@ -521,6 +635,7 @@ fn status(path: &Path) -> anyhow::Result<()> {
 }
 
 async fn camera_command(path: &Path, command: CameraCommand) -> anyhow::Result<()> {
+    validate_recording_store(&recording_root())?;
     let mut state = load_state(path)?;
     match command {
         CameraCommand::Apply {
@@ -576,6 +691,7 @@ async fn camera_command(path: &Path, command: CameraCommand) -> anyhow::Result<(
 }
 
 async fn run(path: &Path) -> anyhow::Result<()> {
+    validate_recording_store(&recording_root())?;
     let mut state = load_state(path)?;
     let server_client = server_client()?;
     let device_client = device_client()?;
@@ -1173,46 +1289,217 @@ fn read_stdin_json<T: for<'de> Deserialize<'de>>() -> anyhow::Result<T> {
 }
 
 fn load_state(path: &Path) -> anyhow::Result<LocalState> {
-    let metadata = fs::symlink_metadata(path).context("client is not configured; run setup")?;
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
+        if error.kind() == io::ErrorKind::NotFound {
+            anyhow::anyhow!("client is not configured; run setup")
+        } else {
+            anyhow::anyhow!(
+                "pairing_state_incompatible: cannot inspect config: {error}; run setup --replace to archive it and pair again"
+            )
+        }
+    })?;
     ensure!(
         metadata.is_file() && !metadata.file_type().is_symlink(),
-        "config must be a regular file without symlinks"
+        "pairing_state_incompatible: config must be a regular file without symlinks; correct the path manually"
     );
-    let bytes = fs::read(path)?;
+    let bytes = fs::read(path).map_err(|error| {
+        anyhow::anyhow!(
+            "pairing_state_incompatible: config cannot be read: {error}; run setup --replace to archive it and pair again"
+        )
+    })?;
     ensure!(
         bytes.len() as u64 <= MAX_INPUT_BYTES,
-        "config exceeds 1 MiB"
+        "pairing_state_incompatible: config exceeds 1 MiB; run setup --replace to archive it and pair again"
     );
-    let state: LocalState = serde_json::from_slice(&bytes)?;
+    let document: Value = serde_json::from_slice(&bytes).map_err(|error| {
+        anyhow::anyhow!(
+            "pairing_state_incompatible: config JSON is corrupt: {error}; run setup --replace to archive it and pair again"
+        )
+    })?;
+    ensure!(
+        document.get("format").and_then(Value::as_u64) == Some(3),
+        "pairing_state_incompatible: config format is not supported; run setup --replace to archive it and pair again"
+    );
+    let state: LocalState = serde_json::from_value(document).map_err(|error| {
+        anyhow::anyhow!(
+            "pairing_state_incompatible: config schema is not supported: {error}; run setup --replace to archive it and pair again"
+        )
+    })?;
     ensure!(
         state.format == 3 && !state.installation_id.is_nil(),
-        "config is not the current format"
+        "pairing_state_incompatible: installation identity is invalid; run setup --replace to archive it and pair again"
     );
     ensure!(
         !state.instances.is_empty() && state.instances.len() <= 256,
-        "config must contain 1-256 camera instances"
+        "pairing_state_incompatible: config must contain 1-256 camera instances; run setup --replace to archive it and pair again"
     );
     let mut instance_ids = HashSet::new();
     for instance in &state.instances {
         ensure!(
             !instance.instance_id.is_nil() && instance.access_token.len() == 43,
-            "camera instance credential is invalid"
+            "pairing_state_incompatible: camera instance credential is invalid; run setup --replace to archive it and pair again"
         );
         ensure!(
             instance_ids.insert(instance.instance_id),
-            "camera instance IDs must be unique"
+            "pairing_state_incompatible: camera instance IDs must be unique; run setup --replace to archive it and pair again"
         );
-        validate_name(&instance.name)?;
-        validate_server_origin(&instance.server)?;
+        validate_name(&instance.name).map_err(|error| {
+            anyhow::anyhow!(
+                "pairing_state_incompatible: camera instance name is invalid: {error}; run setup --replace to archive it and pair again"
+            )
+        })?;
+        validate_server_origin(&instance.server).map_err(|error| {
+            anyhow::anyhow!(
+                "pairing_state_incompatible: camera instance Server is invalid: {error}; run setup --replace to archive it and pair again"
+            )
+        })?;
         if let Some(camera) = &instance.camera {
-            camera.validate()?;
+            camera.validate().map_err(|error| {
+                anyhow::anyhow!(
+                    "configuration_state_incompatible: camera configuration is invalid: {error}; the config was preserved"
+                )
+            })?;
             ensure!(
                 camera.id == instance.instance_id,
-                "each authorization code must bind exactly its own camera ID"
+                "configuration_state_incompatible: camera ID does not match its paired instance; the config was preserved"
             );
         }
     }
     Ok(state)
+}
+
+fn is_pairing_state_incompatible(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|cause| cause.to_string().starts_with("pairing_state_incompatible:"))
+}
+
+fn replace_incompatible_pairing_state(path: &Path, state: &LocalState) -> anyhow::Result<PathBuf> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
+        anyhow::anyhow!(
+            "pairing_state_incompatible: cannot inspect config before recovery: {error}"
+        )
+    })?;
+    ensure!(
+        metadata.is_file() && !metadata.file_type().is_symlink(),
+        "pairing_state_incompatible: refusing to archive a config path that is not a regular non-symlink file"
+    );
+    let parent = path.parent().context("config path has no parent")?;
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .context("config file name is not valid UTF-8")?;
+    let archive = parent.join(format!("{file_name}.incompatible-{}", Uuid::new_v4()));
+    fs::rename(path, &archive).context("archive incompatible pairing state")?;
+    if let Err(error) = save_state(path, state) {
+        let restore_error = fs::rename(&archive, path).err();
+        return match restore_error {
+            Some(restore_error) => Err(error.context(format!(
+                "failed to restore archived pairing state after recovery failed: {restore_error}"
+            ))),
+            None => {
+                Err(error.context("new pairing state was not committed; original config restored"))
+            }
+        };
+    }
+    Ok(archive)
+}
+
+fn validate_recording_store(root: &Path) -> anyhow::Result<()> {
+    let metadata = match fs::symlink_metadata(root) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            anyhow::bail!(
+                "important_state_incompatible: cannot inspect recording root {}: {error}; recordings were preserved",
+                root.display()
+            )
+        }
+    };
+    ensure!(
+        metadata.is_dir() && !metadata.file_type().is_symlink(),
+        "important_state_incompatible: recording root {} is not a regular directory; recordings were preserved",
+        root.display()
+    );
+    let camera_directories = fs::read_dir(root).map_err(|error| {
+        anyhow::anyhow!(
+            "important_state_incompatible: cannot read recording root {}: {error}; recordings were preserved",
+            root.display()
+        )
+    })?;
+    let mut entry_count = 0usize;
+    for camera_directory in camera_directories {
+        entry_count = entry_count
+            .checked_add(1)
+            .context("important_state_incompatible: recording entry count overflowed")?;
+        ensure!(
+            entry_count <= 100_000,
+            "important_state_incompatible: recording store exceeds the 100000-entry safety limit; recordings were preserved"
+        );
+        let camera_directory = camera_directory.map_err(|error| {
+            anyhow::anyhow!(
+                "important_state_incompatible: cannot enumerate recording root {}: {error}; recordings were preserved",
+                root.display()
+            )
+        })?;
+        let path = camera_directory.path();
+        let metadata = fs::symlink_metadata(&path).map_err(|error| {
+            anyhow::anyhow!(
+                "important_state_incompatible: cannot inspect recording entry {}: {error}; recordings were preserved",
+                path.display()
+            )
+        })?;
+        let valid_camera_directory = metadata.is_dir()
+            && !metadata.file_type().is_symlink()
+            && path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .and_then(|value| Uuid::parse_str(value).ok())
+                .is_some();
+        ensure!(
+            valid_camera_directory,
+            "important_state_incompatible: unrecognized recording entry {}; recordings were preserved",
+            path.display()
+        );
+        let recordings = fs::read_dir(&path).map_err(|error| {
+            anyhow::anyhow!(
+                "important_state_incompatible: cannot read recording directory {}: {error}; recordings were preserved",
+                path.display()
+            )
+        })?;
+        for recording in recordings {
+            entry_count = entry_count
+                .checked_add(1)
+                .context("important_state_incompatible: recording entry count overflowed")?;
+            ensure!(
+                entry_count <= 100_000,
+                "important_state_incompatible: recording store exceeds the 100000-entry safety limit; recordings were preserved"
+            );
+            let recording = recording.map_err(|error| {
+                anyhow::anyhow!(
+                    "important_state_incompatible: cannot enumerate recording directory {}: {error}; recordings were preserved",
+                    path.display()
+                )
+            })?;
+            let recording_path = recording.path();
+            let metadata = fs::symlink_metadata(&recording_path).map_err(|error| {
+                anyhow::anyhow!(
+                    "important_state_incompatible: cannot inspect recording {}: {error}; recordings were preserved",
+                    recording_path.display()
+                )
+            })?;
+            let is_mp4 = recording_path
+                .extension()
+                .and_then(|value| value.to_str())
+                .is_some_and(|value| value.eq_ignore_ascii_case("mp4"));
+            ensure!(
+                metadata.is_file() && !metadata.file_type().is_symlink() && is_mp4,
+                "important_state_incompatible: unrecognized recording file {}; recordings were preserved",
+                recording_path.display()
+            );
+        }
+    }
+    Ok(())
 }
 
 fn save_state(path: &Path, state: &LocalState) -> anyhow::Result<()> {
@@ -1429,5 +1716,73 @@ mod tests {
                 .is_err()
         );
         assert!(validate_publish_url("rtsps://sentinel.example:8322/camera").is_err());
+    }
+
+    #[test]
+    fn old_or_corrupt_account_state_requires_explicit_repair() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.json");
+        fs::write(&path, br#"{"format":2,"legacy":true}"#).unwrap();
+        let error = load_state(&path).err().unwrap();
+        assert!(is_pairing_state_incompatible(&error));
+        assert!(error.to_string().contains("run setup --replace"));
+
+        fs::write(&path, b"not-json").unwrap();
+        let error = load_state(&path).err().unwrap();
+        assert!(is_pairing_state_incompatible(&error));
+        assert!(error.to_string().contains("config JSON is corrupt"));
+    }
+
+    #[test]
+    fn incompatible_pairing_recovery_archives_original_bytes() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.json");
+        let original = br#"{"format":1,"account":"old"}"#;
+        fs::write(&path, original).unwrap();
+        let camera_id = Uuid::new_v4();
+        let replacement = state_with(vec![camera(camera_id, "front")]);
+
+        let archive = replace_incompatible_pairing_state(&path, &replacement).unwrap();
+
+        assert_eq!(fs::read(archive).unwrap(), original);
+        assert_eq!(
+            load_state(&path).unwrap().installation_id,
+            replacement.installation_id
+        );
+    }
+
+    #[test]
+    fn invalid_camera_configuration_is_not_discardable_pairing_state() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.json");
+        let id = Uuid::new_v4();
+        let mut state = state_with(vec![camera(id, "front")]);
+        state.instances[0].camera.as_mut().unwrap().id = Uuid::new_v4();
+        fs::write(&path, serde_json::to_vec(&state).unwrap()).unwrap();
+
+        let error = load_state(&path).err().unwrap();
+
+        assert!(!is_pairing_state_incompatible(&error));
+        assert!(
+            error
+                .to_string()
+                .starts_with("configuration_state_incompatible:")
+        );
+    }
+
+    #[test]
+    fn unknown_recording_entries_are_reported_and_preserved() {
+        let directory = tempfile::tempdir().unwrap();
+        let recording = directory.path().join("old-layout.bin");
+        fs::write(&recording, b"important recording bytes").unwrap();
+
+        let error = validate_recording_store(directory.path()).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .starts_with("important_state_incompatible:")
+        );
+        assert_eq!(fs::read(recording).unwrap(), b"important recording bytes");
     }
 }

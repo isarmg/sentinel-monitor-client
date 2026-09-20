@@ -2,7 +2,7 @@
 
 ## 1. 前置条件与状态文件
 
-当前版本为 `0.3.5`，需要 `ffmpeg` 与同套发行中的 `ffprobe` 均可从后台服务的 `PATH` 找到。默认配置路径为：
+当前版本为 `0.3.6`，需要 `ffmpeg` 与同套发行中的 `ffprobe` 均可从后台服务的 `PATH` 找到。默认配置路径为：
 
 - Linux：`/etc/isarmg/sentinel-client/config.json`
 - macOS：`/Library/Application Support/SentinelClient/config.json`
@@ -96,6 +96,9 @@ Server 返回的发布地址必须是证书受系统信任且主机名匹配的 
 | ONVIF 发现为空 | Client 是否与摄像头同一可达网段，UDP 3702 组播是否被网络策略拦截 |
 | 配置已保存但画面离线 | 摄像头 URL/凭据、FFprobe 探测、Server RTSPS 证书和 Client 到发布端口的连通性 |
 | 修改后 Server 尚未更新 | `run` 是否仍在运行；等待下一次快照并检查该实例错误输出 |
+| `pairing_state_incompatible` | 旧账户文件会保留；创建新授权码后运行 `setup --interactive --replace` 归档旧文件并重新配对 |
+| `configuration_state_incompatible` | 当前摄像头配置不合法；文件已保留，不会被账户恢复流程清除 |
+| `important_state_incompatible` | 本地录像布局、文件类型或可读性不兼容；录像已保留，禁止直接覆盖或自动迁移 |
 
 不要通过手改本地 JSON 的 `format`、`installation_id` 或实例 ID 修复状态；运行时检测到安装身份变化会要求重启，
 错误绑定可能使实例无法重新配对。修改摄像头应使用 `camera apply/remove` 的原子写入路径。

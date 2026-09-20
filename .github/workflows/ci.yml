@@ -32,6 +32,8 @@ jobs:
         run: cargo clippy --locked --all-targets -- -D warnings
       - name: Test all targets
         run: cargo test --locked --all-targets
+      - name: Validate Windows installer choices
+        run: python3 packaging/windows/tests/test-authoring.py
 
   native-build:
     name: Native build (${{ matrix.name }})
@@ -58,3 +60,35 @@ jobs:
         run: rustup toolchain install 1.98.0 --profile minimal
       - name: Build native client
         run: cargo build --locked --release
+      - name: Build Windows MSI
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages[0].version
+          .\packaging\windows\build-installer.ps1 `
+            -ClientExe "$PWD\target\release\sentinel-client.exe" `
+            -Version $version `
+            -Output "$env:RUNNER_TEMP\sentinel-msi"
+      - name: Verify custom path and explicit state cleanup
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $msi = @(Get-ChildItem "$env:RUNNER_TEMP\sentinel-msi" -Filter '*.msi' -File)
+          if ($msi.Count -ne 1) { throw "Expected one Sentinel MSI; found $($msi.Count)." }
+          $installRoot = Join-Path $env:RUNNER_TEMP 'SentinelClientCustom'
+          $stateRoot = Join-Path $env:ProgramData 'SentinelClient'
+          New-Item -ItemType Directory -Force -Path (Join-Path $stateRoot 'recordings\old-layout') | Out-Null
+          Set-Content -LiteralPath (Join-Path $stateRoot 'config.json') -Value '{"format":1}' -NoNewline
+          Set-Content -LiteralPath (Join-Path $stateRoot 'recordings\old-layout\unknown-v1.bin') -Value 'old recording' -NoNewline
+          $install = Start-Process msiexec.exe -ArgumentList "/i `"$($msi[0].FullName)`" INSTALLFOLDER=`"$installRoot`" ADDLOCAL=Complete /qn /norestart" -Wait -PassThru
+          if ($install.ExitCode -notin @(0, 3010)) { throw "Sentinel MSI failed with $($install.ExitCode)." }
+          & (Join-Path $installRoot 'sentinel-client.exe') --version
+          if ($LASTEXITCODE) { throw 'Custom-path Sentinel executable verification failed.' }
+          if ((Test-Path (Join-Path $stateRoot 'config.json')) -or (Test-Path (Join-Path $stateRoot 'recordings'))) {
+            throw 'Deselected Sentinel configuration or recording data was retained.'
+          }
+          $uninstall = Start-Process msiexec.exe -ArgumentList "/x `"$($msi[0].FullName)`" /qn /norestart" -Wait -PassThru
+          if ($uninstall.ExitCode -notin @(0, 3010)) { throw "Sentinel MSI uninstall failed with $($uninstall.ExitCode)." }
+          if (Test-Path $installRoot) { throw 'Custom Sentinel installation directory survived uninstall.' }
+          if (Test-Path $stateRoot) { Remove-Item -LiteralPath $stateRoot -Force }
+          Write-Host 'Sentinel MSI custom path, cleanup choices and explicit result checks passed.'

@@ -1,6 +1,6 @@
 # Sentinel Monitor Client
 
-`sentinel-client` `0.3.5` 是 Sentinel Monitor 的摄像头边缘客户端。它在摄像头所在网络中保存 RTSP/ONVIF 凭据、探测视频流、向 Server 发布主/子码流，并按配置在 Client 或 Server 侧录像。
+`sentinel-client` `0.3.6` 是 Sentinel Monitor 的摄像头边缘客户端。它在摄像头所在网络中保存 RTSP/ONVIF 凭据、探测视频流、向 Server 发布主/子码流，并按配置在 Client 或 Server 侧录像。
 
 当前提供 `rtsp` 与 `onvif` 两种适配器，支持 Linux、Windows 和 macOS 构建。运行环境必须提供同一发行套件中的 `ffmpeg` 与 `ffprobe`；原生服务和正式安装包以对应 Release 为准。
 
@@ -29,6 +29,8 @@ sudo sentinel-client run
 ```
 
 Bootstrap JSON、RTSP/ONVIF 样例、授权码轮换、热更新和故障定位见[完整配置指南](docs/configuration.md)。不要把摄像头密码、长期授权码或 Client token 放进命令参数和日志。
+
+升级时会分别识别配对账户、摄像头配置和本地录像：不兼容账户要求显式重新配对并归档原文件；配置错误和无法识别的录像数据会明确报错且保持原样。
 
 ## 开发验证
 

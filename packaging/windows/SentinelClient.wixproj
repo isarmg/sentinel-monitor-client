@@ -1,0 +1,19 @@
+<Project Sdk="WixToolset.Sdk/4.0.6">
+  <PropertyGroup>
+    <OutputType>Package</OutputType>
+    <InstallerPlatform>x64</InstallerPlatform>
+    <Platform>x64</Platform>
+    <Cultures>en-US</Cultures>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <ProductVersion Condition="'$(ProductVersion)' == ''">0.3.6</ProductVersion>
+    <ClientExe Condition="'$(ClientExe)' == ''">$(MSBuildThisFileDirectory)..\..\target\x86_64-pc-windows-msvc\release\sentinel-client.exe</ClientExe>
+    <DefineConstants>ClientExe=$(ClientExe);ProductVersion=$(ProductVersion);LicenseRtf=$(MSBuildThisFileDirectory)License.rtf</DefineConstants>
+    <OutputName>sentinel-client-$(ProductVersion)-windows-x64</OutputName>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="WixToolset.UI.wixext" Version="4.0.6" />
+  </ItemGroup>
+  <Target Name="ValidateInputs" BeforeTargets="BeforeBuild">
+    <Error Condition="!Exists('$(ClientExe)')" Text="ClientExe does not exist: $(ClientExe)" />
+  </Target>
+</Project>
