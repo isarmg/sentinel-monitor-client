@@ -5,7 +5,7 @@
     <Platform>x64</Platform>
     <Cultures>en-US</Cultures>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <ProductVersion Condition="'$(ProductVersion)' == ''">0.3.6</ProductVersion>
+    <ProductVersion Condition="'$(ProductVersion)' == ''">0.3.7</ProductVersion>
     <ClientExe Condition="'$(ClientExe)' == ''">$(MSBuildThisFileDirectory)..\..\target\x86_64-pc-windows-msvc\release\sentinel-client.exe</ClientExe>
     <DefineConstants>ClientExe=$(ClientExe);ProductVersion=$(ProductVersion);LicenseRtf=$(MSBuildThisFileDirectory)License.rtf</DefineConstants>
     <OutputName>sentinel-client-$(ProductVersion)-windows-x64</OutputName>
