@@ -66,6 +66,10 @@ sudo shred -u /root/sentinel-bootstrap.json
 sudo sentinel-client setup --interactive
 ```
 
+首次配对和 `setup --interactive --replace` 使用同一个 `Authorization code (visible)` 普通文本提示。输入或
+粘贴的授权码会在终端中明文回显，不提供遮罩、隐藏切换或特殊显示流程；随后配置摄像头时，摄像头密码仍
+使用隐藏输入。CLI 不会把授权码或摄像头密码写入日志、结果输出或命令参数。
+
 保存输出中的实例 UUID。一次安装可以保存多个实例，但每个实例只对应一台摄像机。
 
 ## 3. RTSP 摄像头

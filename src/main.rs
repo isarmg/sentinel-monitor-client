@@ -408,12 +408,11 @@ async fn setup(
                 MAX_URL_BYTES,
                 input_deadline,
             )?,
-            authorization_code: sarmg_client_cli::prompt_secret(
-                "Authorization code",
+            authorization_code: sarmg_client_cli::prompt_text(
+                "Authorization code (visible)",
                 MAX_AUTHORIZATION_CODE_BYTES,
                 input_deadline,
-            )?
-            .to_string(),
+            )?,
             name: sarmg_client_cli::prompt_text("Client name", MAX_NAME_BYTES, input_deadline)?,
         }
     } else {
