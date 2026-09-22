@@ -1,6 +1,6 @@
 # Sentinel Monitor Client 配置指南
 
-本文适用于 `sentinel-client` `0.3.7`，按实际 CLI 说明实例配对、RTSP/ONVIF 摄像头配置、更新和验证。
+本文适用于 `sentinel-client` `0.3.8`，按实际 CLI 说明实例配对、RTSP/ONVIF 摄像头配置、更新和验证。
 
 ## 1. 前置条件
 

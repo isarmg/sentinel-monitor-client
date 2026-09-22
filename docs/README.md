@@ -1,6 +1,6 @@
 # Sentinel Monitor Client 文档
 
-本文档集描述当前 `0.3.7` 实现。命令行帮助、`src/main.rs` 的严格输入结构和
+本文档集描述当前 `0.3.8` 实现。命令行帮助、`src/main.rs` 的严格输入结构和
 `src/device.rs` 的适配器模型是行为事实源；Release 说明只记录对应历史版本的变化。
 
 | 文档 | 内容 |
