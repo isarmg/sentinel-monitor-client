@@ -1,6 +1,6 @@
 [package]
 name = "sentinel-client"
-version = "0.3.9"
+version = "0.3.10"
 edition = "2024"
 rust-version = "1.98"
 license = "Apache-2.0"
@@ -14,8 +14,8 @@ chrono = "0.4"
 clap = { version = "4", features = ["derive"] }
 rand = "0.8"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
-sarmg-client-cli = { git = "https://github.com/isarmg/sarmg-foundation-client.git", rev = "8890ced415793b144997ebb04728f52fbe3e7e59", version = "=0.9.15" }
-sarmg-secure-xml = { git = "https://github.com/isarmg/sarmg-foundation-client.git", rev = "8890ced415793b144997ebb04728f52fbe3e7e59", version = "=0.9.15" }
+sarmg-client-cli = { git = "https://github.com/isarmg/sarmg-foundation-client.git", rev = "9bf6eec21f42188c73105eef2f369bf47c8b8f86", version = "=0.9.16" }
+sarmg-secure-xml = { git = "https://github.com/isarmg/sarmg-foundation-client.git", rev = "9bf6eec21f42188c73105eef2f369bf47c8b8f86", version = "=0.9.16" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha1 = "0.10"

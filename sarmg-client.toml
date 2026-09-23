@@ -4,7 +4,7 @@ source_roots = ["."]
 
 [foundation]
 platform_generation = 1
-version = "0.9.15"
+version = "0.9.16"
 
 [[components]]
 id = "client"

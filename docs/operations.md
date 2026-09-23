@@ -2,7 +2,7 @@
 
 ## 1. 前置条件与状态文件
 
-当前版本为 `0.3.9`，需要 `ffmpeg` 与同套发行中的 `ffprobe` 均可从后台服务的 `PATH` 找到。默认配置路径为：
+当前版本为 `0.3.10`，需要 `ffmpeg` 与同套发行中的 `ffprobe` 均可从后台服务的 `PATH` 找到。默认配置路径为：
 
 - Linux：`/etc/isarmg/sentinel-client/config.json`
 - macOS：`/Library/Application Support/SentinelClient/config.json`
