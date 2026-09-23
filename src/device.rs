@@ -477,7 +477,7 @@ mod tests {
     }
 
     #[test]
-    fn onvif_configuration_has_no_legacy_rtsp_shape() {
+    fn onvif_configuration_uses_a_device_service_url() {
         let camera: Camera = serde_json::from_value(serde_json::json!({
             "name": "ptz",
             "storage_mode": "client",

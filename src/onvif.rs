@@ -307,14 +307,26 @@ async fn soap_request(
     {
         anyhow::bail!("ONVIF response exceeds size limit");
     }
-    let bytes = response.bytes().await?;
-    ensure!(
-        bytes.len() <= MAX_XML_BYTES,
-        "ONVIF response exceeds size limit"
-    );
-    let xml = String::from_utf8(bytes.to_vec()).context("ONVIF response is not UTF-8")?;
+    let mut response = response;
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        append_response_chunk(&mut bytes, &chunk)?;
+    }
+    let xml = String::from_utf8(bytes).context("ONVIF response is not UTF-8")?;
     parse_xml(&xml)?;
     Ok(xml)
+}
+
+fn append_response_chunk(bytes: &mut Vec<u8>, chunk: &[u8]) -> anyhow::Result<()> {
+    ensure!(
+        bytes
+            .len()
+            .checked_add(chunk.len())
+            .is_some_and(|length| length <= MAX_XML_BYTES),
+        "ONVIF response exceeds size limit"
+    );
+    bytes.extend_from_slice(chunk);
+    Ok(())
 }
 
 fn parse_identity(xml: &str) -> anyhow::Result<DeviceIdentity> {
@@ -600,6 +612,22 @@ fn xml_escape(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn response_chunks_stop_at_the_xml_limit_without_appending_the_extra_chunk() {
+        let mut bytes = Vec::new();
+        let half = vec![b'x'; MAX_XML_BYTES / 2];
+        append_response_chunk(&mut bytes, &half).unwrap();
+        append_response_chunk(&mut bytes, &half).unwrap();
+        assert_eq!(bytes.len(), MAX_XML_BYTES);
+        let error = append_response_chunk(&mut bytes, b"x").unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("ONVIF response exceeds size limit")
+        );
+        assert_eq!(bytes.len(), MAX_XML_BYTES);
+    }
 
     #[test]
     fn profile_selection_normalizes_largest_and_smallest_profiles() {

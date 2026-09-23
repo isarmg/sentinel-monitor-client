@@ -32,10 +32,10 @@ sentinel-client --config /absolute/path/config.json status
 
 配置包含长期 Client token、摄像头 URL 和可选密码，只允许管理员及服务账号读取。不要直接编辑其身份、format 或实例 ID。
 
-升级会区分账户配置和重要录像数据。旧版、损坏或未知的账户/配对文档返回
+升级会区分账户配置和重要录像数据。不符合当前格式、损坏或无法识别的账户/配对文档返回
 `pairing_state_incompatible`；创建新的 Server 授权码后，显式运行
-`sentinel-client setup --interactive --replace`，Client 会先原样归档旧文档，再提交新配对。当前格式中的摄像头配置错误返回
-`configuration_state_incompatible`，不会被 `--replace` 当作账户数据清除。本地录像目录如果包含旧布局、链接、非 MP4 文件或不可读内容，返回
+`sentinel-client setup --interactive --replace`，Client 会先原样归档该文档，再提交新配对。当前格式中的摄像头配置错误返回
+`configuration_state_incompatible`，不会被 `--replace` 当作账户数据清除。本地录像目录如果包含无法识别的布局、链接、非 MP4 文件或不可读内容，返回
 `important_state_incompatible` 并保留全部内容，必须先用兼容版本导出或由管理员核实后处理。
 
 ## 2. 创建实例并配对
