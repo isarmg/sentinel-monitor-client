@@ -50,6 +50,8 @@ sentinel-client --config /absolute/path/config.json status
 }
 ```
 
+`server` 必须是 HTTPS 根地址，可以包含端口；路径（如 `/admin`、`/api/v2`）、URL 内的用户名/密码、查询参数和片段都会被拒绝。Debug 构建还允许 `localhost`、`127.0.0.1` 和 `[::1]` 的 HTTP 根地址用于本机验证。
+
 Linux 上创建受保护文件并通过 stdin 提交：
 
 ```sh

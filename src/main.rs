@@ -69,7 +69,7 @@ enum CommandKind {
         #[command(subcommand)]
         command: CameraCommand,
     },
-    /// Installer-only removal of explicitly deselected legacy state.
+    /// Installer-only removal of explicitly deselected configuration or recordings.
     #[command(hide = true)]
     InstallerReset {
         #[arg(long)]
@@ -1238,14 +1238,20 @@ fn validate_server_origin(value: &str) -> anyhow::Result<Url> {
     ensure!(
         url.username().is_empty()
             && url.password().is_none()
+            && url.path() == "/"
             && url.query().is_none()
             && url.fragment().is_none(),
-        "server must be an origin without credentials, query or fragment"
+        "server must be an origin without credentials, path, query or fragment"
     );
     #[cfg(debug_assertions)]
     let allowed = url.scheme() == "https"
         || (url.scheme() == "http"
-            && matches!(url.host_str(), Some("127.0.0.1" | "::1" | "localhost")));
+            && matches!(
+                url.host(),
+                Some(url::Host::Domain("localhost"))
+                    | Some(url::Host::Ipv4(std::net::Ipv4Addr::LOCALHOST))
+                    | Some(url::Host::Ipv6(std::net::Ipv6Addr::LOCALHOST))
+            ));
     #[cfg(not(debug_assertions))]
     let allowed = url.scheme() == "https";
     ensure!(
@@ -1502,6 +1508,11 @@ fn validate_recording_store(root: &Path) -> anyhow::Result<()> {
 }
 
 fn save_state(path: &Path, state: &LocalState) -> anyhow::Result<()> {
+    let bytes = serde_json::to_vec_pretty(state)?;
+    ensure!(
+        bytes.len() as u64 <= MAX_INPUT_BYTES,
+        "config exceeds 1 MiB"
+    );
     let parent = path.parent().context("config path has no parent")?;
     fs::create_dir_all(parent)?;
     let temporary = parent.join(format!(".sentinel-client-{}.tmp", Uuid::new_v4()));
@@ -1513,16 +1524,16 @@ fn save_state(path: &Path, state: &LocalState) -> anyhow::Result<()> {
         options.mode(0o600);
     }
     let mut file = options.open(&temporary)?;
-    let bytes = serde_json::to_vec_pretty(state)?;
-    ensure!(
-        bytes.len() as u64 <= MAX_INPUT_BYTES,
-        "config exceeds 1 MiB"
-    );
-    file.write_all(&bytes)?;
-    file.sync_all()?;
-    drop(file);
-    fs::rename(&temporary, path)?;
-    Ok(())
+    let result = (|| {
+        file.write_all(&bytes)?;
+        file.sync_all()?;
+        drop(file);
+        fs::rename(&temporary, path)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result.context("persist Sentinel configuration")
 }
 
 fn default_config_path() -> PathBuf {
@@ -1622,6 +1633,55 @@ mod tests {
         assert!(validate_server_origin("https://sentinel.example").is_ok());
         assert!(validate_server_origin("http://192.0.2.1").is_err());
         assert!(validate_server_origin("https://user@sentinel.example").is_err());
+    }
+
+    #[test]
+    fn server_origin_rejects_non_root_paths_and_request_metadata() {
+        for suffix in ["/admin", "/api/v2", "/camera/", "/?token=x", "/#camera"] {
+            assert!(validate_server_origin(&format!("https://sentinel.example{suffix}")).is_err());
+        }
+        assert_eq!(
+            validate_server_origin(" https://sentinel.example:8443/ ")
+                .unwrap()
+                .as_str(),
+            "https://sentinel.example:8443/"
+        );
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn debug_server_origin_accepts_both_loopback_address_families() {
+        for address in ["http://localhost", "http://127.0.0.1", "http://[::1]"] {
+            assert!(validate_server_origin(address).is_ok(), "{address}");
+        }
+        assert!(validate_server_origin("http://[::2]").is_err());
+    }
+
+    #[test]
+    fn failed_state_replacement_removes_temporary_credentials() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("config.json");
+        fs::create_dir(&path).unwrap();
+        assert!(save_state(&path, &state_with(Vec::new())).is_err());
+        let entries: Vec<_> = fs::read_dir(temporary.path()).unwrap().collect();
+        assert_eq!(entries.len(), 1);
+        assert!(path.is_dir());
+    }
+
+    #[test]
+    fn oversized_state_does_not_create_temporary_credentials() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("config.json");
+        let mut state = state_with(Vec::new());
+        state.instances.push(CameraInstance {
+            server: "https://sentinel.example".into(),
+            instance_id: Uuid::new_v4(),
+            access_token: "x".repeat(MAX_INPUT_BYTES as usize),
+            name: "camera".into(),
+            camera: None,
+        });
+        assert!(save_state(&path, &state).is_err());
+        assert_eq!(fs::read_dir(temporary.path()).unwrap().count(), 0);
     }
 
     #[test]
