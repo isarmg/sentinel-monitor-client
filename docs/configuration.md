@@ -40,7 +40,7 @@ sentinel-client --config /absolute/path/config.json status
 
 ## 2. 创建实例并配对
 
-先在 Sentinel Server 管理页创建 Client 实例并复制授权码。Bootstrap 文件只接受以下字段：
+先在 Sentinel Server 管理页创建 Client 实例并复制 36 位小写英文字母数字授权码。Bootstrap 文件只接受以下字段：
 
 ```json
 {

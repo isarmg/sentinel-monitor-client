@@ -25,7 +25,7 @@ const PROTOCOL: &str = "sentinel-edge-v3";
 const PRODUCT: &str = "sentinel-monitor";
 const MAX_INPUT_BYTES: u64 = 1024 * 1024;
 const MAX_URL_BYTES: usize = 4_096;
-const MAX_AUTHORIZATION_CODE_BYTES: usize = 64;
+const MAX_AUTHORIZATION_CODE_BYTES: usize = 36;
 const MAX_NAME_BYTES: usize = 256;
 const MAX_LOCATION_BYTES: usize = 512;
 const MAX_USERNAME_BYTES: usize = 256;
@@ -1224,11 +1224,11 @@ fn validate_name(name: &str) -> anyhow::Result<()> {
 
 fn validate_authorization_code(value: &str) -> anyhow::Result<()> {
     ensure!(
-        value.len() == 64
+        value.len() == MAX_AUTHORIZATION_CODE_BYTES
             && value
                 .bytes()
-                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f')),
-        "authorization_code must be 64 lowercase hexadecimal characters"
+                .all(|byte| byte.is_ascii_digit() || byte.is_ascii_lowercase()),
+        "authorization_code must be 36 lowercase ASCII letters or digits"
     );
     Ok(())
 }
@@ -1633,6 +1633,23 @@ mod tests {
         assert!(validate_server_origin("https://sentinel.example").is_ok());
         assert!(validate_server_origin("http://192.0.2.1").is_err());
         assert!(validate_server_origin("https://user@sentinel.example").is_err());
+    }
+
+    #[test]
+    fn authorization_code_matches_the_current_server_contract() {
+        assert!(validate_authorization_code("abcdefghijklmnopqrstuvwxyz0123456789").is_ok());
+        assert!(validate_authorization_code(&"z9".repeat(18)).is_ok());
+        for value in [
+            "a".repeat(35),
+            "a".repeat(37),
+            "a".repeat(64),
+            "A".repeat(36),
+            "-".repeat(36),
+            "é".repeat(18),
+            format!("{}\n", "a".repeat(35)),
+        ] {
+            assert!(validate_authorization_code(&value).is_err());
+        }
     }
 
     #[test]

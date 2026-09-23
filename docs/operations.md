@@ -24,7 +24,7 @@ sudo sentinel-client setup --interactive
 ```json
 {
   "server": "https://sentinel.example.com",
-  "authorization_code": "64 位小写十六进制授权码",
+  "authorization_code": "36 位小写英文字母数字授权码",
   "name": "camera-edge-01"
 }
 ```
