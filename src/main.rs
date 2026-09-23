@@ -1051,6 +1051,8 @@ fn spawn_publisher(source: &str, destination: &str) -> anyhow::Result<Child> {
         ])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
         .spawn()
         .context("start ffmpeg publisher")
 }
@@ -1085,6 +1087,8 @@ fn spawn_recorder(source: &str, camera_id: Uuid) -> anyhow::Result<Child> {
         .arg(pattern)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
         .spawn()
         .context("start ffmpeg recorder")
 }

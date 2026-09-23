@@ -9,7 +9,7 @@
 - Windows：`%ProgramData%\SentinelClient\config.json`
 
 可用全局 `--config PATH` 指向其他文件。配置包含长期 Client token、摄像头地址和可选账号密码，必须限制为服务
-账户可读；不要把配置、stdin bootstrap JSON 或带凭据的 RTSP URL 写入日志、命令参数或工单。
+账户可读；不要把配置、stdin bootstrap JSON 或带凭据的 RTSP URL 手工写入日志、CLI 启动参数或工单。FFmpeg 子进程以含凭据的 RTSP URL 参数访问摄像头，因此本机进程检查权限也应受控；Client 丢弃 FFmpeg 原始 stderr，避免它进入服务日志。
 
 ## 2. 配对与摄像头配置
 

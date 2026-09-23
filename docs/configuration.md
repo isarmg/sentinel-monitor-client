@@ -70,7 +70,7 @@ sudo sentinel-client setup --interactive
 
 首次配对和 `setup --interactive --replace` 使用同一个 `Authorization code (visible)` 普通文本提示。输入或
 粘贴的授权码会在终端中明文回显，不提供遮罩、隐藏切换或特殊显示流程；随后配置摄像头时，摄像头密码仍
-使用隐藏输入。CLI 不会把授权码或摄像头密码写入日志、结果输出或命令参数。
+使用隐藏输入。CLI 不会把授权码或摄像头密码写入自身日志、结果输出或启动参数。运行时 FFmpeg 子进程的 RTSP 输入参数可能包含摄像头凭据，本机进程检查者可见；Client 丢弃 FFmpeg 原始 stderr，避免它进入服务日志。
 
 保存输出中的实例 UUID。一次安装可以保存多个实例，但每个实例只对应一台摄像机。
 
@@ -163,7 +163,7 @@ profile token 为空时由适配器选择媒体 Profile。发现为空时检查 
 sudo sentinel-client run
 ```
 
-正式运行请使用 Release 为当前平台安装的原生服务，不要自行假设服务名。配置热更新时重新执行 `camera apply`，运行中的 Client 会读取新 revision 并重建对应 FFmpeg 进程，无需重启整个 Client。
+正式运行请使用 Release 为当前平台安装的原生服务，不要自行假设服务名。配置热更新时重新执行 `camera apply`，运行中的 Client 会读取新 revision 并重建对应 FFmpeg 进程，无需重启整个 Client。若 `run` 因配置读取错误退出，已启动的 FFmpeg 子进程会随之终止。
 
 完整成功需要同时确认：
 
