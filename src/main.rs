@@ -301,25 +301,25 @@ fn installer_reset(path: &Path, configuration: bool, data: bool) -> anyhow::Resu
     if configuration {
         match fs::symlink_metadata(path) {
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error).context("inspect old Sentinel configuration"),
+            Err(error) => return Err(error).context("inspect Sentinel configuration"),
             Ok(metadata) => {
                 ensure!(
                     metadata.is_file() && !metadata.file_type().is_symlink(),
                     "configuration_state_incompatible: refusing to remove a config path that is not a regular non-symlink file"
                 );
-                fs::remove_file(path).context("remove old Sentinel configuration")?;
+                fs::remove_file(path).context("remove Sentinel configuration")?;
             }
         }
-        println!("old Sentinel configuration was not retained");
+        println!("Sentinel configuration removed");
     } else {
         let root = recording_root();
         validate_removable_tree(&root)?;
         match fs::remove_dir_all(&root) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error).context("remove old Sentinel recordings"),
+            Err(error) => return Err(error).context("remove Sentinel recordings"),
         }
-        println!("old Sentinel recordings were not retained");
+        println!("Sentinel recordings removed");
     }
     Ok(())
 }
@@ -1799,7 +1799,7 @@ mod tests {
     }
 
     #[test]
-    fn old_or_corrupt_account_state_requires_explicit_repair() {
+    fn incompatible_or_corrupt_account_state_requires_explicit_repair() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("config.json");
         fs::write(&path, br#"{"format":2,"legacy":true}"#).unwrap();
