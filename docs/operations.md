@@ -96,7 +96,7 @@ Server 返回的发布地址必须是证书受系统信任且主机名匹配的 
 | ONVIF 发现为空 | Client 是否与摄像头同一可达网段，UDP 3702 组播是否被网络策略拦截 |
 | 配置已保存但画面离线 | 摄像头 URL/凭据、FFprobe 探测、Server RTSPS 证书和 Client 到发布端口的连通性 |
 | 修改后 Server 尚未更新 | `run` 是否仍在运行；等待下一次快照并检查该实例错误输出 |
-| `pairing_state_incompatible` | 旧账户文件会保留；创建新授权码后运行 `setup --interactive --replace` 归档旧文件并重新配对 |
+| `pairing_state_incompatible` | 不兼容的账户文件会保留；创建新授权码后运行 `setup --interactive --replace` 归档该文件并重新配对 |
 | `configuration_state_incompatible` | 当前摄像头配置不合法；文件已保留，不会被账户恢复流程清除 |
 | `important_state_incompatible` | 本地录像布局、文件类型或可读性不兼容；录像已保留，禁止直接覆盖或自动迁移 |
 
