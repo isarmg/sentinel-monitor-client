@@ -1195,8 +1195,8 @@ dependencies = [
 
 [[package]]
 name = "sarmg-client-cli"
-version = "0.9.14"
-source = "git+https://github.com/isarmg/sarmg-foundation-client.git?rev=8b8ea8517a3cf68e566f8230e87bae9ab40b4106#8b8ea8517a3cf68e566f8230e87bae9ab40b4106"
+version = "0.9.15"
+source = "git+https://github.com/isarmg/sarmg-foundation-client.git?rev=8890ced415793b144997ebb04728f52fbe3e7e59#8890ced415793b144997ebb04728f52fbe3e7e59"
 dependencies = [
  "libc",
  "serde",
@@ -1210,8 +1210,8 @@ dependencies = [
 
 [[package]]
 name = "sarmg-secure-xml"
-version = "0.9.14"
-source = "git+https://github.com/isarmg/sarmg-foundation-client.git?rev=8b8ea8517a3cf68e566f8230e87bae9ab40b4106#8b8ea8517a3cf68e566f8230e87bae9ab40b4106"
+version = "0.9.15"
+source = "git+https://github.com/isarmg/sarmg-foundation-client.git?rev=8890ced415793b144997ebb04728f52fbe3e7e59#8890ced415793b144997ebb04728f52fbe3e7e59"
 dependencies = [
  "quick-xml",
  "roxmltree",
@@ -1258,7 +1258,7 @@ checksum = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
 
 [[package]]
 name = "sentinel-client"
-version = "0.3.8"
+version = "0.3.9"
 dependencies = [
  "anyhow",
  "async-trait",
