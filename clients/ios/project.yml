@@ -1,0 +1,41 @@
+name: XcocCamera
+options:
+  bundleIdPrefix: org.sarmg
+  deploymentTarget:
+    iOS: "16.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.10"
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "1000000"
+targets:
+  XcocCamera:
+    type: application
+    platform: iOS
+    sources: [XcocCamera]
+    dependencies:
+      - framework: Vendor/XcocRust.xcframework
+        embed: false
+    info:
+      path: XcocCamera/Info.plist
+      properties:
+        CFBundleDisplayName: Xcoc Camera
+        UILaunchScreen: {}
+        NSCameraUsageDescription: 用于将本机摄像头视频发布到您配对的 xcos。
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.sarmg.xcoc
+        CODE_SIGN_STYLE: Automatic
+  XcocCameraTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [XcocCameraTests]
+    dependencies:
+      - target: XcocCamera
+schemes:
+  XcocCamera:
+    build:
+      targets:
+        XcocCamera: all
+    test:
+      targets: [XcocCameraTests]

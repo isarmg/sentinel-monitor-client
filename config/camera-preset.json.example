@@ -1,0 +1,17 @@
+{
+  "name": "front-door",
+  "location": "entrance",
+  "model": "DS-2CD RTSP series",
+  "enabled": true,
+  "storage_mode": "server",
+  "adapter": {
+    "kind": "preset",
+    "preset": "hikvision",
+    "host": "192.0.2.10",
+    "port": 554,
+    "channel": 1,
+    "sub_stream": true,
+    "username": "camera-user",
+    "password": "REPLACE_WITH_CAMERA_PASSWORD"
+  }
+}

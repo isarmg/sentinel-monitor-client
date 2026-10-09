@@ -1,0 +1,12 @@
+/target/
+/.idea/
+/.vscode/
+*.log
+/clients/android/.gradle/
+/clients/android/local.properties
+/clients/android/**/build/
+/clients/android/app/src/main/jniLibs/
+/clients/ios/Vendor/
+/clients/ios/DerivedData/
+/clients/ios/*.xcodeproj/
+/clients/ios/XcocCamera/Info.plist

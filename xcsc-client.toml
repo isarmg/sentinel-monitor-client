@@ -1,0 +1,12 @@
+format = 1
+product_id = "xcos"
+source_roots = ["."]
+
+[foundation]
+platform_generation = 1
+version = "1.0.0"
+
+[[components]]
+id = "client"
+profile = "desktop-client"
+capabilities = ["https-delivery", "protected-terminal-input", "bounded-xml"]

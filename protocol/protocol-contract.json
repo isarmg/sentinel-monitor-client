@@ -1,0 +1,10 @@
+{
+  "wire_protocol": "xcos-wire-v1",
+  "api_prefix": "/api/v1",
+  "media_auth_path": "/internal/v1/media/auth",
+  "media_jwt_protocol": "xcos-media-jwt-v1",
+  "media_jwt_issuer": "xcos/1.0.0",
+  "media_jwt_audience": "xcos-mediamtx/1.20.0",
+  "media_jwt_kind": "media",
+  "edge_protocol": "xcos-edge-v1"
+}

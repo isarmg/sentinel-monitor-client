@@ -1,0 +1,120 @@
+name: xcoc Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions: {}
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTUP_TOOLCHAIN: 1.99.0
+
+jobs:
+  build:
+    name: Build ${{ matrix.asset }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            asset: xcoc-linux-x86_64
+            binary: target/release/xcoc
+          - os: windows-2025
+            asset: xcoc-windows-x86_64
+            binary: target/release/xcoc.exe
+          - os: macos-15
+            asset: xcoc-macos-arm64
+            binary: target/release/xcoc
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - name: Check out exact tag without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify exact annotated release identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          version="$(sed -n 's/^version = "\([0-9][0-9.]*\)"/\1/p' Cargo.toml | head -n 1)"
+          test "$GITHUB_REF_NAME" = "v${version}"
+          test "$(git cat-file -t "refs/tags/${GITHUB_REF_NAME}")" = tag
+          test "$(git rev-parse "refs/tags/${GITHUB_REF_NAME}^{commit}")" = "$GITHUB_SHA"
+          test -f "docs/releases/${version}.md"
+      - name: Install exact Rust toolchain
+        run: rustup toolchain install 1.99.0 --profile minimal
+      - name: Build release binary
+        run: cargo build --locked --release
+      - name: Package Linux binary and systemd installer
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          mkdir -p dist
+          tar -czf "dist/${{ matrix.asset }}.tar.gz" \
+            "${{ matrix.binary }}" packaging/linux/install.sh \
+            packaging/linux/xcoc.service README.md LICENSE-APACHE
+      - name: Package macOS binary
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          mkdir -p dist
+          tar -czf "dist/${{ matrix.asset }}.tar.gz" \
+            "${{ matrix.binary }}" README.md LICENSE-APACHE
+      - name: Package Windows binary
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist | Out-Null
+          Compress-Archive -Path '${{ matrix.binary }}', README.md, LICENSE-APACHE -DestinationPath 'dist/${{ matrix.asset }}.zip'
+          .\packaging\windows\build-installer.ps1 `
+            -ClientExe "$PWD\${{ matrix.binary }}" `
+            -Version $($env:GITHUB_REF_NAME.Substring(1)) `
+            -Output "$PWD\dist"
+      - name: Retain release input
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out exact tag without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download verified release inputs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: xcoc-*
+          path: dist
+          merge-multiple: true
+      - name: Create checksums
+        working-directory: dist
+        run: sha256sum -- * > SHA256SUMS
+      - name: Publish immutable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          notes="docs/releases/${version}.md"
+          test -f "$notes"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Refusing to overwrite existing release $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --verify-tag \
+            --notes-file "$notes" \
+            --title "xcoc $GITHUB_REF_NAME"

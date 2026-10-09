@@ -1,0 +1,213 @@
+name: xcoc CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions: {}
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTUP_TOOLCHAIN: 1.99.0
+
+jobs:
+  quality:
+    name: Format, lint, and test
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out source without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install exact Rust toolchain
+        run: rustup toolchain install 1.99.0 --profile minimal --component rustfmt,clippy
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Lint all targets
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - name: Test all targets
+        run: cargo test --locked --workspace --all-targets --all-features
+      - name: Validate Windows service installer
+        run: python3 packaging/windows/tests/test-authoring.py
+      - name: Validate Linux systemd installer syntax
+        run: sh -n packaging/linux/install.sh
+      - name: Test Linux installer rollback
+        run: sh packaging/linux/tests/test-install.sh
+      - name: Check mobile build scripts
+        run: bash -n scripts/build-android-rust.sh scripts/build-ios-rust.sh
+      - name: Install media validation tools
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Fetch reviewed media companion
+        run: |
+          mkdir -p "$RUNNER_TEMP/xcoc-media"
+          curl --fail --location --retry 3 --output "$RUNNER_TEMP/xcoc-media/archive.tar.gz" https://github.com/bluenviron/mediamtx/releases/download/v1.20.0/mediamtx_v1.20.0_linux_amd64.tar.gz
+          tar -xzf "$RUNNER_TEMP/xcoc-media/archive.tar.gz" -C "$RUNNER_TEMP/xcoc-media"
+      - name: Validate native H264 conversion against media companion
+        run: XCOC_TEST_MEDIAMTX="$RUNNER_TEMP/xcoc-media/mediamtx" bash scripts/test-media.sh
+
+  android:
+    name: Android native camera
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install 1.99.0 --profile minimal --target aarch64-linux-android
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699
+        with:
+          packages: platform-tools
+      - run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;28.2.13676358"
+      - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb
+        with:
+          gradle-version: '8.13'
+      - run: cargo install cargo-ndk --version 4.1.2 --locked
+      - name: Build native publisher
+        run: ANDROID_NDK_HOME="$ANDROID_HOME/ndk/28.2.13676358" bash scripts/build-android-rust.sh
+      - name: Build host bridge for JVM boundary tests
+        run: cargo build --locked -p xcoc-mobile-ffi --features jni-host-tests
+      - run: gradle -p clients/android testDebugUnitTest assembleDebug lintDebug
+
+  ios:
+    name: iOS native camera
+    permissions:
+      contents: read
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install 1.99.0 --profile minimal --target aarch64-apple-ios,aarch64-apple-ios-sim
+      - run: bash scripts/build-ios-rust.sh
+      - run: brew install xcodegen
+      - run: cd clients/ios && xcodegen generate
+      - name: Build and test simulator application
+        run: |
+          simulator_id="$(xcrun simctl list devices available -j | python3 -c 'import json,sys; print(next(d["udid"] for group in json.load(sys.stdin)["devices"].values() for d in group if d.get("isAvailable") and d["name"].startswith("iPhone")))')"
+          xcodebuild -project clients/ios/XcocCamera.xcodeproj -scheme XcocCamera -sdk iphonesimulator -destination "id=$simulator_id" CODE_SIGNING_ALLOWED=NO -derivedDataPath clients/ios/DerivedData test
+
+  native-build:
+    name: Native build (${{ matrix.name }})
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64
+            os: ubuntu-24.04
+          - name: Windows x86_64
+            os: windows-2025
+          - name: macOS arm64
+            os: macos-15
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - name: Check out source without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install exact Rust toolchain
+        run: rustup toolchain install 1.99.0 --profile minimal
+      - name: Build native client
+        run: cargo build --locked --release
+      - name: Test macOS runtime and protected storage
+        if: runner.os == 'macOS'
+        run: cargo test --locked --workspace --all-targets --all-features
+      - name: Test Windows private ACLs
+        if: runner.os == 'Windows'
+        run: cargo test --locked --release --bin xcoc windows_
+      - name: Build Windows MSI
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages[0].version
+          .\packaging\windows\build-installer.ps1 `
+            -ClientExe "$PWD\target\release\xcoc.exe" `
+            -Version $version `
+            -Output "$env:RUNNER_TEMP\xcoc-msi"
+      - name: Verify custom path, service startup, and state retention
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $msi = @(Get-ChildItem "$env:RUNNER_TEMP\xcoc-msi" -Filter '*.msi' -File)
+          if ($msi.Count -ne 1) { throw "Expected one Xcoc MSI; found $($msi.Count)." }
+          $installRoot = Join-Path $env:RUNNER_TEMP 'XcocClientCustom'
+          $stateRoot = Join-Path $env:ProgramData 'XcocClient'
+          $cameraId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+          New-Item -ItemType Directory -Force -Path (Join-Path $stateRoot "recordings\$cameraId") | Out-Null
+          $existingState = '{"format":3,"installation_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","instances":[{"server":"https://example.invalid","instance_id":"' + $cameraId + '","access_token":"' + ('a' * 43) + '","name":"CI camera","camera":null}]}'
+          Set-Content -LiteralPath (Join-Path $stateRoot 'config.json') -Value $existingState -NoNewline
+          Set-Content -LiteralPath (Join-Path $stateRoot "recordings\$cameraId\existing.mp4") -Value 'existing recording' -NoNewline
+          $install = Start-Process msiexec.exe -ArgumentList "/i `"$($msi[0].FullName)`" INSTALLFOLDER=`"$installRoot`" /qn /norestart" -Wait -PassThru
+          if ($install.ExitCode -notin @(0, 3010)) { throw "Xcoc MSI failed with $($install.ExitCode)." }
+          & (Join-Path $installRoot 'xcoc.exe') --version
+          if ($LASTEXITCODE) { throw 'Custom-path Xcoc executable verification failed.' }
+          if ((Get-Content -LiteralPath (Join-Path $stateRoot 'config.json') -Raw) -ne $existingState) { throw 'Xcoc MSI changed existing configuration.' }
+          if (-not (Test-Path (Join-Path $stateRoot "recordings\$cameraId\existing.mp4"))) { throw 'Xcoc MSI removed existing recording data.' }
+          $service = Get-CimInstance Win32_Service -Filter "Name='XcocClient'"
+          if ($null -eq $service -or $service.State -ne 'Running' -or $service.StartMode -ne 'Auto') { throw 'Xcoc Windows service was not running with automatic startup.' }
+          $privatePaths = @(
+            $stateRoot,
+            (Join-Path $stateRoot 'config.json'),
+            (Join-Path $stateRoot 'recordings'),
+            (Join-Path $stateRoot "recordings\$cameraId"),
+            (Join-Path $stateRoot "recordings\$cameraId\existing.mp4")
+          )
+          $privateSids = @('S-1-5-18', 'S-1-5-32-544')
+          function Test-PrivateAcl([string]$privatePath) {
+            $acl = Get-Acl -LiteralPath $privatePath
+            if (-not $acl.AreAccessRulesProtected) { return $false }
+            $rules = $acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])
+            $ownerRules = @($rules | Where-Object { $_.AccessControlType -eq 'Allow' -and $_.IdentityReference.Value -eq 'S-1-3-4' })
+            if ($ownerRules.Count -ne 1 -or $ownerRules[0].FileSystemRights -ne [System.Security.AccessControl.FileSystemRights]::ReadPermissions) { return $false }
+            foreach ($rule in $rules) {
+              if ($rule.AccessControlType -eq 'Allow' -and $rule.IdentityReference.Value -notin ($privateSids + 'S-1-3-4')) {
+                return $false
+              }
+            }
+            return $true
+          }
+          $aclDeadline = (Get-Date).AddSeconds(30)
+          do {
+            $unsecured = @($privatePaths | Where-Object { -not (Test-PrivateAcl $_) })
+            if ($unsecured.Count -eq 0) { break }
+            Start-Sleep -Seconds 1
+          } while ((Get-Date) -lt $aclDeadline)
+          if ($unsecured.Count -gt 0) { throw "Xcoc service did not secure paths: $($unsecured -join ', ')" }
+          $client = Join-Path $installRoot 'xcoc.exe'
+          $logText = & $client logs --event 'xcoc.windows.started' --tail 10 --format json
+          if ($LASTEXITCODE) { throw 'Private Xcoc runtime log query failed' }
+          $logs = $logText | ConvertFrom-Json -DateKind String
+          if (-not $logs.ok -or $logs.result.source -ne 'private-runtime-log' -or $logs.result.retention_bytes -ne 41943040 -or @($logs.result.entries).Count -lt 1) { throw 'SCM typed diagnostics were not persisted' }
+          foreach ($entry in $logs.result.entries) {
+            if ($entry.event -ne 'xcoc.windows.started' -or $entry.timestamp -notmatch 'Z$') { throw 'Typed event/time query contract failed' }
+          }
+          $logDirectory = Join-Path $stateRoot 'logs'
+          $logAcl = Get-Acl -LiteralPath $logDirectory
+          if (-not $logAcl.AreAccessRulesProtected -or $logAcl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne 'S-1-5-18') { throw 'Log directory is not private and service owned' }
+          foreach ($rule in $logAcl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])) {
+            if ($rule.AccessControlType -ne 'Allow' -or $rule.IdentityReference.Value -notin @('S-1-5-18','S-1-5-32-544')) { throw 'Log directory grants unexpected access' }
+          }
+          $followText = & $client logs --follow --format ndjson --timeout 2s
+          if ($LASTEXITCODE -or -not $followText) { throw 'Typed private Xcoc runtime log follow failed' }
+          foreach ($line in $followText) { if (-not ($line | ConvertFrom-Json).ok) { throw 'Runtime log follow returned failure' } }
+          $uninstall = Start-Process msiexec.exe -ArgumentList "/x `"$($msi[0].FullName)`" /qn /norestart" -Wait -PassThru
+          if ($uninstall.ExitCode -notin @(0, 3010)) { throw "Xcoc MSI uninstall failed with $($uninstall.ExitCode)." }
+          if (Test-Path $installRoot) { throw 'Custom Xcoc installation directory survived uninstall.' }
+          if (Get-CimInstance Win32_Service -Filter "Name='XcocClient'") { throw 'Xcoc Windows service survived uninstall.' }
+          if (-not (Test-Path (Join-Path $stateRoot 'config.json'))) { throw 'Xcoc configuration was removed during uninstall.' }
+          Remove-Item -LiteralPath $stateRoot -Recurse -Force
+          Write-Host 'Xcoc MSI custom path, service startup and state retention checks passed.'

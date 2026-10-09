@@ -1,0 +1,30 @@
+[package]
+name = "xcoc-mobile-ffi"
+version = "1.0.0"
+edition = "2024"
+rust-version = "1.99"
+license = "Apache-2.0"
+publish = false
+
+[lib]
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+jni-host-tests = ["dep:jni", "xcsc-mobile-ffi/jni"]
+
+[dependencies]
+xcoc = { path = "../.." }
+xcsc-mobile-ffi = { git = "https://github.com/isarmg/xcsc.git", rev = "a3c827b7f0f69d84ff69f72be1533a7171ab63d6", version = "=1.0.0" }
+base64 = "0.23"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "~1.53.2", features = ["rt-multi-thread"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+jni = { version = "=0.22.4", optional = true }
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "=0.22.4"
+xcsc-mobile-ffi = { git = "https://github.com/isarmg/xcsc.git", rev = "a3c827b7f0f69d84ff69f72be1533a7171ab63d6", version = "=1.0.0", features = ["jni"] }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"

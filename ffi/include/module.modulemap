@@ -1,0 +1,4 @@
+module XcocRust {
+    header "XcocRust.h"
+    export *
+}
