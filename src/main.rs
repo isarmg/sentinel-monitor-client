@@ -2199,6 +2199,9 @@ fn collect_resolved_cameras(
                     }
                 }
             }
+            // Reload already resets old inflight flags before replacement tasks
+            // start. A late cancellation must not clear those new tasks' flags.
+            Err(error) if error.is_cancelled() => {}
             Err(_error) => {
                 runtime_event(
                     "xcoc.device.task_failed",

@@ -1369,3 +1369,22 @@ fn local_recording_names_survive_same_second_restarts() {
         "restarting a recorder within the same second must not replace its last segment"
     );
 }
+
+#[tokio::test]
+async fn cancelled_resolution_does_not_reset_replacement_task() {
+    let id = Uuid::new_v4();
+    let mut tasks = tokio::task::JoinSet::new();
+    let old = tasks.spawn(std::future::pending::<ResolveResult>());
+    tasks.abort_all();
+    let mut current = new_runtime_camera();
+    current.resolving = true;
+    let mut runtime = HashMap::from([(id, current)]);
+    tasks.spawn(std::future::pending::<ResolveResult>());
+    while !old.is_finished() {
+        tokio::task::yield_now().await;
+    }
+    collect_resolved_cameras(&mut tasks, &mut runtime).unwrap();
+    assert!(runtime[&id].resolving);
+    assert!(!runtime[&id].should_resolve(Instant::now()));
+    tasks.shutdown().await;
+}
