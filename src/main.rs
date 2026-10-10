@@ -1788,13 +1788,15 @@ fn build_snapshot_request(
         .map(|camera| {
             let current = runtime.get(&camera.id);
             let resolved = current.and_then(|current| current.resolved.as_ref());
-            let identity = resolved
+            let mut identity = resolved
                 .map(|device| device.identity.clone())
                 .unwrap_or_else(|| DeviceIdentity {
                     manufacturer: camera.manufacturer.clone(),
                     model: camera.model.clone(),
                     ..DeviceIdentity::default()
                 });
+            identity.manufacturer = identity.manufacturer.filter(|value| !value.is_empty());
+            identity.model = identity.model.filter(|value| !value.is_empty());
             let capabilities = resolved
                 .map(|device| device.capabilities.clone())
                 .unwrap_or_else(DeviceCapabilities::unknown);
