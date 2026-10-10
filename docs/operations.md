@@ -124,4 +124,4 @@ xcoc logs --since 2026-10-07T00:00:00Z --level warn --format json
 xcoc logs --follow --format ndjson --timeout 60s
 ```
 
-可用 `--instance-id`、`--event`、`--request-id` 和 `--task-id` 精确筛选。后台整体启动事件具有服务 scope，只有确实属于某个已知实例的事件才带 instance_id。日志源损坏、超限或持续跟踪游标已从保留窗口移除时明确失败，避免把丢失记录显示为空成功。
+可用 `--instance-id`、`--event`、`--request-id` 和 `--task-id` 精确筛选。后台整体启动事件使用 `scope=client`；属于某个已知实例的事件使用 `scope=instance` 并携带 `instance_id`。日志源损坏、超限或持续跟踪游标已从保留窗口移除时明确失败，避免把丢失记录显示为空成功。

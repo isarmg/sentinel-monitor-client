@@ -87,7 +87,9 @@ Windows 默认 `%ProgramData%\XcocClient` 目录和其中的配置、录影片�
 
 `server` 必须是 HTTPS 根地址，可以包含端口；路径（如 `/admin`、`/api/v1`）、URL 内的用户名/密码、查询参数和片段都会被拒绝。Debug 构建还允许 `localhost`、`127.0.0.1` 和 `[::1]` 的 HTTP 根地址用于本机验证。
 
-Linux 上创建受保护文件并通过 stdin 提交：
+下面所有复制 `config/*.json.example` 的命令仅在源码仓库根目录执行；公开 Release 归档不含 `config/`。从发行包安装时，将相应命令改为 `sudo install -m 0600 /dev/null 目标文件`，再用 `sudoedit` 把本文对应的完整 JSON 写入该文件并填写实际值。不要把空文件直接提交给 CLI。
+
+Linux 上创建受保护的配对文件并通过 stdin 提交：
 
 ```sh
 sudo install -m 0600 config/bootstrap.json.example /root/xcoc-bootstrap.json
@@ -263,4 +265,4 @@ FFprobe 每次最多等待 12 秒，stdout 上限 256 KiB、stderr 上限 64 KiB
 
 结果获服务端确认后仍保留至原到期时间后 120 秒；未确认的结果不因时间自动丢弃。日志达到上限时通过 command_capacity 停止接收新动作，继续发送已有结果。存储写入失败会停止执行；损坏或不兼容日志保留并明确报错。不要删除日志来重试 PTZ；先核对设备实际位置和服务端的未确认结果，由操作者决定新的动作。
 
-运行权由 xcsc `SingleInstanceLock` 和独立私有 `.xcoc-runtime` 目录保护，拒绝不安全的锁路径。Linux 默认位于 `/var/lib/xcoc`，自定义配置使用该配置的父目录。配对文件与命令日志分别管理，凭据轮换不清除执行证据。
+运行权由 xcsc `SingleInstanceLock` 和独立私有 `.xcoc-runtime` 目录保护，拒绝不安全的锁路径。Linux 默认为 `/var/lib/isarmg/xcoc/.xcoc-runtime`；自定义配置在该配置的父目录下使用 `.xcoc-runtime`。配对文件与命令日志分别管理，凭据轮换不清除执行证据。

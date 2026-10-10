@@ -25,7 +25,7 @@ sudo sh -c 'exec xcoc setup --input-stdin < /root/xcoc-bootstrap.json'
 sudo xcoc status
 ```
 
-再发现摄像头，使用配对结果中的实例 ID 写入摄像头配置并核对：
+再发现摄像头，使用配对结果中的实例 ID 写入摄像头配置并核对。下方复制模板的命令仅适用于源码仓库根目录；公开 Release 压缩包不含 `config/`。从发行包安装时，先用 `sudo install -m 0600 /dev/null /root/xcoc-camera.json` 创建受保护文件，再按[配置指南中的 RTSP JSON](docs/configuration.md#3-rtsp-摄像头)填写，随后执行同一 `camera apply` 命令：
 
 ```sh
 sudo xcoc camera discover --timeout-seconds 3
