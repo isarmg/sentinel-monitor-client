@@ -1,13 +1,13 @@
 # 摄像头兼容与协议转换
 
-摄像头接入与协议转换全部在 Client 实现。网络摄像头继续使用 RTSP/ONVIF；电脑与手机摄像头在 Client
-采集、编码为 H.264，再通过 Server 已有的 RTSPS 发布授权接入 MediaMTX。转换后的快照
-`adapter_kind` 为 `rtsp`，协议继续为 `xcos-edge-v1`，Server 不需要增加厂商或平台适配器。
+摄像头接入与协议转换全部在客户端实现。网络摄像头继续使用 RTSP/ONVIF；电脑与手机摄像头在客户端
+采集、编码为 H.264，再通过服务端已有的 RTSPS 发布授权接入 MediaMTX。转换后的快照
+`adapter_kind` 为 `rtsp`，协议继续为 `xcos-edge-v1`，服务端不需要增加厂商或平台适配器。
 
 ## 常用网络摄像头
 
 运行 `xcoc camera presets` 查看品牌、型号系列示例和官方文档链接；该命令无需配对。
-`preset` 自动生成主/子码流路径，用户名和密码仍只留在受保护的 Client 配置中。
+`preset` 自动生成主/子码流路径，用户名和密码仍只留在受保护的客户端配置中。
 
 | preset | 典型系列/型号 | 主码流路径（channel=1） | 子码流路径 |
 |---|---|---|---|
@@ -22,7 +22,7 @@
 云端专用或部分多镜头机型可能使用其他路径或不开放该协议。Tapo 使用相机账户，区别于 TP-Link 云账户。
 Reolink 需在设备设置开启对应服务。普通宇视 IPC、Tapo 预设只接受 channel=1；多镜头或 NVR 的特殊
 通道使用原有 `rtsp` 配置明确填写地址。没有子码流时设置 `sub_stream: false`。Axis 子码流是请求较低
-分辨率，仍需设备支持该分辨率。需要 PTZ 时使用原有 `onvif` 适配器，由设备 Profile 确认能力。
+分辨率，仍需设备支持该分辨率。需要 PTZ 时使用原有 `onvif` 适配器，由设备的 ONVIF Profile 确认能力。
 
 参考 `config/camera-preset.json.example`，`preset` 可替换为表中任意值。`host` 只填写主机名/IP，IPv6
 使用 `[2001:db8::10]`；端口独立填写，凭据使用 `username`/`password`，不要混入 host。
@@ -42,16 +42,16 @@ xcoc camera apply --instance-id INSTANCE_UUID --input-stdin < /protected/camera.
 - macOS：`config/camera-local-macos.json.example`，`backend: avfoundation`，device 填视频设备索引。
 
 填写摄像头支持的宽度、高度和帧率，应用配置后运行 `xcoc run`。宽高必须为偶数，帧率为
-1–60。FFmpeg 必须包含对应采集 backend 与 `libx264` 编码器。系统必须授予运行用户访问摄像头的权限。
+1–60。FFmpeg 必须包含对应采集后端与 `libx264` 编码器。系统必须授予运行用户访问摄像头的权限。
 Linux 服务用户需要设备权限；Windows 系统服务不能保证访问交互用户摄像头，内置摄像头应在已授权
-的用户会话中运行 Client；macOS 应允许终端/运行程序访问摄像头。已经运行的后台 Client 占有单实例锁时，
-先停止该实例再在用户会话运行，避免两个 Client 争用同一配置。
+的用户会话中运行客户端；macOS 应允许终端/运行程序访问摄像头。已经运行的后台客户端占有单实例锁时，
+先停止该实例再在用户会话运行，避免两个客户端争用同一配置。
 
-每台本地摄像头只有一个采集与编码进程。私有随机路径的 loopback HTTP relay 分发编码视频到独立
+每台本地摄像头只有一个采集与编码进程。私有随机路径的回环 HTTP 转发器分发编码视频到独立
 FFmpeg 发布器和录像器，固定缓冲预算，慢消费者会断开并由运行循环重建。摄像头视频不在局域网
 监听；relay 地址和随机路径不写入快照或日志。与 RTSP 凭据一样，本机能读取进程参数的用户可能看见
-relay 地址，应保护本机账户。设置 `storage_mode: client` 即启用现有本地 MP4 分段录像；Server
-连接中断时录制继续。配置热更新、禁用、移除或退出 Client 都会释放采集资源。
+relay 地址，应保护本机账户。设置 `storage_mode: client` 即启用现有本地 MP4 分段录像；服务端
+连接中断时录制继续。配置热更新、禁用、移除或退出客户端都会释放采集资源。
 
 电脑摄像头当前提供一个 H.264 视频主码流，不附带麦克风、子码流、PTZ 或事件能力。
 
@@ -59,11 +59,11 @@ relay 地址，应保护本机账户。设置 `storage_mode: client` 即启用�
 
 原生应用源码、构建与使用见 [移动端指南](mobile.md)。Android 使用 Camera2 + MediaCodec，iOS 使用
 AVFoundation + VideoToolbox；共享 Rust 模块将原生 H.264 转换为 RTP，并通过 RTSPS 的 ANNOUNCE /
-SETUP / RECORD 发布到已有 Server。无需 FFmpeg、额外网关或修改 Server 配置协议。
+SETUP / RECORD 发布到已有服务端。无需 FFmpeg、额外网关或修改服务端配置协议。
 
 移动端支持前后摄像头选择、实例配对、开始/停止、周期快照、断线后重建发布与有界帧队列。
-Android 使用有常驻通知和停止按钮的 camera foreground service；必须从可见界面取得权限并启动。
-iOS 当前只在前台采集，进入后台立即停止；回来后可手动重新启动。移动端当前使用 Server 录像，
+Android 使用有常驻通知和停止按钮的摄像头前台服务；必须从可见界面取得权限并启动。
+iOS 当前只在前台采集，进入后台立即停止；回来后可手动重新启动。移动端当前使用服务端录像，
 不提供本地录像、音频、子码流、PTZ。能力快照明确报告 unsupported，而不会假装支持 ONVIF 控制。
 
 ## 依据与验收
@@ -76,6 +76,6 @@ iOS 当前只在前台采集，进入后台立即停止；回来后可手动重�
 [Tapo](https://www.tp-link.com/us/support/faq/2680/)。桌面采集选项依据 [FFmpeg 设备文档](https://ffmpeg.org/ffmpeg-devices.html)，
 移动端 RTP 封包依据 [RFC 6184](https://datatracker.ietf.org/doc/html/rfc6184)。
 
-接入后的完整验收：Server 显示 RTSP 设备和实际码流尺寸，浏览器播放有画面；按所选位置产生录像；
+接入后的完整验收：服务端显示 RTSP 设备和实际码流尺寸，浏览器播放有画面；按所选位置产生录像；
 断开网络后重新接通能恢复发布；停止/禁用后系统摄像头占用结束。实机摄像头、系统权限和编码器能力
 仍需分别在目标设备验收，模拟器构建通过不代表实机摄像头完成认证。

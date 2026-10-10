@@ -4,10 +4,10 @@
 
 ## 部署前准备
 
-1. 在 [Client Releases](https://github.com/isarmg/xcoc/releases) 下载目标版本的本机平台资产和 `SHA256SUMS`。Linux/macOS 资产名不包含版本号，必须确认所在 Release 的版本。Windows 正式安装用 MSI，ZIP 仅用于手工运行。
-2. 请 Server 管理员创建摄像头实例，提供 HTTPS 根地址、实例授权码。桌面一次安装可管理多个实例，每个实例对应一台摄像机；移动端只管理一份配对和一个主码流。
-3. 桌面安装 FFmpeg 和同套 FFprobe。后台服务的 PATH 中必须也能找到它们；仅在当前用户终端可用还不够。本机摄像头还需对应采集 backend 和 libx264，见[兼容说明](camera-support.md)。手机使用系统摄像头/编码器，无需安装 FFmpeg。
-4. Server HTTPS 与发布用 RTSPS 证书都必须可信且名称匹配；摄像头 RTSP 可在本地网络内使用。授权码在桌面交互提示中明文回显，摄像头密码隐藏输入。
+1. 在 [客户端 Releases](https://github.com/isarmg/xcoc/releases) 下载目标版本的本机平台资产和 `SHA256SUMS`。Linux/macOS 资产名不包含版本号，必须确认所在 Release 的版本。Windows 正式安装用 MSI，ZIP 仅用于手工运行。
+2. 请服务端管理员创建摄像头实例，提供 HTTPS 根地址、实例授权码。桌面一次安装可管理多个实例，每个实例对应一台摄像机；移动端只管理一份配对和一个主码流。
+3. 桌面安装 FFmpeg 和同套 FFprobe。后台服务的 PATH 中必须也能找到它们；仅在当前用户终端可用还不够。本机摄像头还需对应采集后端和 libx264，见[兼容说明](camera-support.md)。手机使用系统摄像头/编码器，无需安装 FFmpeg。
+4. 服务端 HTTPS 与发布用 RTSPS 证书都必须可信且名称匹配；摄像头 RTSP 可在本地网络内使用。授权码在桌面交互提示中明文回显，摄像头密码隐藏输入。
 5. 下文注释解释命令用途。`INSTANCE_UUID`、`OLD_INSTANCE_UUID` 替换为实际实例 UUID；不要将授权码、摄像头密码或媒体 token 放在命令参数中。
 
 | 平台 | 发行安装方式 | 服务与默认配置 | 本地录像 |
@@ -15,13 +15,13 @@
 | Linux x86_64 | tar.gz 内 systemd 安装脚本 | `xcoc.service`；`/etc/isarmg/xcoc/config.json` | `/var/lib/isarmg/xcoc/recordings` |
 | Windows x64 | MSI | SCM `XcocClient`（LocalSystem）；`C:\ProgramData\XcocClient\config.json` | `C:\ProgramData\XcocClient\recordings` |
 | macOS Apple Silicon | tar.gz，手工部署 | 无随包安装器；默认配置 `/Library/Application Support/XcocClient/config.json` | `/Library/Application Support/XcocClient/recordings` |
-| Android / iOS | 原生应用，按移动指南构建/签名安装 | 应用私有存储及系统安全存储 | 当前移动端在 Server 录像 |
+| Android / iOS | 原生应用，按移动指南构建/签名安装 | 应用私有存储及系统安全存储 | 当前移动端在服务端录像 |
 
-`status` 和 `camera list` 是本机只读视图；服务运行和本机已配对不能代替 Server 的画面/录像验收。xcoc 没有 xsoc/xscc 的 `pair recover`、`doctor` 或通用 `service start/stop` 子命令，不应复制其他产品的命令。
+`status` 和 `camera list` 是本机只读视图；服务运行和本机已配对不能代替服务端的画面/录像验收。xcoc 没有 xsoc/xscc 的 `pair recover`、`doctor` 或通用 `service start/stop` 子命令，不应复制其他产品的命令。
 
 ## Linux x86_64（systemd）
 
-### 1. 安装媒体工具和 Client
+### 1. 安装媒体工具和客户端
 
 以下安装媒体工具以 Debian/Ubuntu 为例；其他发行版用本机包管理器安装 `ffmpeg`，再核对工具路径。
 
@@ -67,7 +67,7 @@ systemctl is-enabled xcoc.service
 
 如果配对已保存但摄像头验证失败，保留输出的 UUID；按配置指南准备受保护 JSON，再 `camera apply --instance-id INSTANCE_UUID --input-stdin`，不必重新配对。Linux 归档不包含 `config/camera.json.example`，可从配置指南复制 JSON 字段，不要引用压缩包内不存在的模板。
 
-在 Server 检查该实例在线、快照更新、实时画面可播放；Server 录像模式还需有新录像索引，本地录像模式需看到 15 分钟 MP4 分段持续生成。单看 service active 不足以判断摄像头可用。
+在服务端检查该实例在线、快照更新、实时画面可播放；服务端录像模式还需有新录像索引，本地录像模式需看到 15 分钟 MP4 分段持续生成。单看 service active 不足以判断摄像头可用。
 
 ### 3. 重新配对
 
@@ -86,7 +86,7 @@ sudo systemctl start xcoc.service
 
 仅在 `pairing_state_incompatible` 时使用 `sudo xcoc setup --interactive --replace`，它验证重要录像状态后归档不兼容账户文件。`configuration_state_incompatible` 或 `important_state_incompatible` 不会被此选项绕过。
 
-Server 删除旧实例后创建新实例时，停服后先 `sudo xcoc unpair OLD_INSTANCE_UUID`，再运行新实例的 `setup`。`unpair` 移除指定本机配对及该实例摄像头配置，保留其他实例和已存录像；不会撤销 Server 授权。删除最后一份配对时本机 config 文件会被移除。
+服务端删除旧实例后创建新实例时，停服后先 `sudo xcoc unpair OLD_INSTANCE_UUID`，再运行新实例的 `setup`。`unpair` 移除指定本机配对及该实例摄像头配置，保留其他实例和已存录像；不会撤销服务端授权。删除最后一份配对时本机 config 文件会被移除。
 
 ### 4. 服务查看、启停与自启
 
@@ -141,13 +141,13 @@ sudo systemctl daemon-reload
 systemctl show xcoc.service --property=LoadState,ActiveState
 ```
 
-正式退役还需在 Server 取消/退役相应实例。本产品没有自动清除全部录像与命令记录的 purge 命令；确认保留/归档策略后再单独管理数据，普通卸载不删除它们。
+正式退役还需在服务端取消/退役相应实例。本产品没有自动清除全部录像与命令记录的 purge 命令；确认保留/归档策略后再单独管理数据，普通卸载不删除它们。
 
 ## Windows x64
 
 ### 1. 安装
 
-先安装本机可用、支持所需采集 backend 的 Windows x64 FFmpeg 发行套件：
+先安装本机可用、支持所需采集后端的 Windows x64 FFmpeg 发行套件：
 
 1. 将 FFmpeg 套件解压到固定目录，找到同一 `bin` 目录中的 `ffmpeg.exe` 和 `ffprobe.exe`，不要放在会被临时清理的目录。
 2. 在系统“高级系统设置 → 环境变量 → 系统变量 → Path → 编辑”中新增该 `bin` 的完整路径，确认保存。不要只修改当前用户 PATH，LocalSystem 服务需要系统配置。
@@ -191,7 +191,7 @@ Stop-Service -Name XcocClient
 Get-Service -Name XcocClient
 ```
 
-如果配对已保存、系统服务启动失败，修复工具路径或服务问题后执行 `& $client service` 继续，不需要新授权码。此前选择不开机自启则执行 `& $client service --no-boot-start`，它仍会立即启动，只将开机策略设为手动。Server 验收同 Linux：新快照、实时画面和录像。
+如果配对已保存、系统服务启动失败，修复工具路径或服务问题后执行 `& $client service` 继续，不需要新授权码。此前选择不开机自启则执行 `& $client service --no-boot-start`，它仍会立即启动，只将开机策略设为手动。服务端验收同 Linux：新快照、实时画面和录像。
 
 ### 3. 重新配对
 
@@ -205,7 +205,7 @@ Stop-Service -Name XcocClient
 Get-Service -Name XcocClient
 ```
 
-`pairing_state_incompatible` 使用 `& $client setup --interactive --replace`；切换到 Server 新建实例前使用 `& $client unpair OLD_INSTANCE_UUID`，保留录像。仅媒体验证失败时通过 `camera apply` 继续，不用授权码重做已经保存的配对。
+`pairing_state_incompatible` 使用 `& $client setup --interactive --replace`；切换到服务端新建实例前使用 `& $client unpair OLD_INSTANCE_UUID`，保留录像。仅媒体验证失败时通过 `camera apply` 继续，不用授权码重做已经保存的配对。
 
 ### 4. 服务管理
 
@@ -259,7 +259,7 @@ $remove.ExitCode
 Get-Service -Name XcocClient -ErrorAction SilentlyContinue
 ```
 
-正式退役还需在 Server 取消实例；MSI 不提供业务数据 purge。保留 `%ProgramData%\XcocClient` 是预期行为。
+正式退役还需在服务端取消实例；MSI 不提供业务数据 purge。保留 `%ProgramData%\XcocClient` 是预期行为。
 
 ## macOS Apple Silicon
 
@@ -290,7 +290,7 @@ sudo env PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin /usr/local/bin/xcoc
 sudo env PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin /usr/local/bin/xcoc run
 ```
 
-前台运行时在 Server 验收画面与录像。用内置/USB 摄像头时还需在实际登录会话通过系统摄像头权限及采集验证；以下系统级后台示例适合网络 RTSP/ONVIF 摄像头，不能替代本机摄像头权限验收。
+前台运行时在服务端验收画面与录像。用内置/USB 摄像头时还需在实际登录会话通过系统摄像头权限及采集验证；以下系统级后台示例适合网络 RTSP/ONVIF 摄像头，不能替代本机摄像头权限验收。
 
 ### 2. 可选：手工登记后台服务
 
@@ -399,7 +399,7 @@ sudo launchctl print system/org.sarmg.xcoc
 sudo rm /usr/local/bin/xcoc /Library/LaunchDaemons/org.sarmg.xcoc.plist
 ```
 
-仅前台部署只需在停止后删除 `/usr/local/bin/xcoc`。配置、录像、命令记录和日志保留；没有包收据需要清理。正式退役还需 Server 撤销实例。
+仅前台部署只需在停止后删除 `/usr/local/bin/xcoc`。配置、录像、命令记录和日志保留；没有包收据需要清理。正式退役还需服务端撤销实例。
 
 ## Android
 
@@ -418,13 +418,13 @@ adb shell am start -n org.sarmg.xcoc/.MainActivity
 
 ### 2. 配对、启动、查看和停止
 
-在 Server 创建实例后，在应用依次填写 HTTPS 根地址、授权码和摄像头名称，点“配对”。授予系统摄像头权限，选择前置/后置摄像头，点“启动摄像头”。界面和常驻通知显示状态；Server 应看到新快照并能播放视频。
+在服务端创建实例后，在应用依次填写 HTTPS 根地址、授权码和摄像头名称，点“配对”。授予系统摄像头权限，选择前置/后置摄像头，点“启动摄像头”。界面和常驻通知显示状态；服务端应看到新快照并能播放视频。
 
 点界面或通知的“停止摄像头”停止采集；再次启动使用已保存配对。Android 使用前台摄像头服务，不提供桌面 systemd/SCM 服务命令，不能假定重启手机后自动开机采集。
 
 ### 3. 重新配对、诊断、卸载
 
-先停止摄像头，请管理员提供新授权码，再在相同 Server 地址下点“配对”，成功后重新启动并验证画面。更换实例时核对目标实例，手机只保存一份配对。
+先停止摄像头，请管理员提供新授权码，再在相同服务端地址下点“配对”，成功后重新启动并验证画面。更换实例时核对目标实例，手机只保存一份配对。
 
 ```sh
 # 查看安装版本、系统权限和应用服务运行信息；只读，不写入授权码。
@@ -438,7 +438,7 @@ adb logcat --pid=ACTUAL_PID
 adb uninstall org.sarmg.xcoc
 ```
 
-也可在系统应用信息页卸载。先核对相机权限、通知/前台限制、网络、手机时间及 HTTPS/RTSPS 证书；没有跳过证书验证或导入私有 CA 的界面。卸载不删除 Server 录像，也不代替撤销 Server 实例。
+也可在系统应用信息页卸载。先核对相机权限、通知/前台限制、网络、手机时间及 HTTPS/RTSPS 证书；没有跳过证书验证或导入私有 CA 的界面。卸载不删除服务端录像，也不代替撤销服务端实例。
 
 ## iOS
 
@@ -448,13 +448,13 @@ adb uninstall org.sarmg.xcoc
 
 ### 2. 配对、启动、查看和停止
 
-打开应用，输入 Server HTTPS 根地址、实例授权码、名称，点“配对”。允许摄像头权限，选择前/后摄像头，点“启动摄像头”；状态在应用界面查看，到 Server 验证画面和录像。点“停止摄像头”即可结束。**进入后台会停止采集，回到前台需手动再次启动**，没有 iOS 后台常驻摄像头服务。
+打开应用，输入服务端 HTTPS 根地址、实例授权码、名称，点“配对”。允许摄像头权限，选择前/后摄像头，点“启动摄像头”；状态在应用界面查看，到服务端验证画面和录像。点“停止摄像头”即可结束。**进入后台会停止采集，回到前台需手动再次启动**，没有 iOS 后台常驻摄像头服务。
 
 ### 3. 重新配对、诊断和卸载
 
-先停摄像头，用 Server 新授权码重新配对，再启动核验。权限拒绝时从系统应用设置恢复；采集失败/离线时检查设备网络、证书、相机占用和界面状态。实机日志通过 Xcode 的设备控制台查看，保留必要的脱敏错误信息；不要公开 token 或发布地址。
+先停摄像头，用服务端新授权码重新配对，再启动核验。权限拒绝时从系统应用设置恢复；采集失败/离线时检查设备网络、证书、相机占用和界面状态。实机日志通过 Xcode 的设备控制台查看，保留必要的脱敏错误信息；不要公开 token 或发布地址。
 
-卸载前停止摄像头，在 Server 撤销/退役实例；使用系统“删除 App”而非仅移除主屏幕图标。应用私有数据会被删除，Keychain 项可能由系统保留，不能把重装视为凭据已撤销；重新安装后按界面实际状态和 Server 当前授权重新配对。Server 录像由 Server 保留策略管理。
+卸载前停止摄像头，在服务端撤销/退役实例；使用系统“删除 App”而非仅移除主屏幕图标。应用私有数据会被删除，Keychain 项可能由系统保留，不能把重装视为凭据已撤销；重新安装后按界面实际状态和服务端当前授权重新配对。服务端录像由服务端保留策略管理。
 
 ## 补充：移动端构建命令的作用
 

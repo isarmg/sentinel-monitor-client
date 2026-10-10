@@ -2060,7 +2060,7 @@ dependencies = [
 [[package]]
 name = "xcsc"
 version = "1.0.0"
-source = "git+https://github.com/isarmg/xcsc.git?rev=00770c007912b276f5bb1075abfefe3c31026276#00770c007912b276f5bb1075abfefe3c31026276"
+source = "git+https://github.com/isarmg/xcsc.git?rev=c45e48e93e360542c2e1db6c6441a9e29b344b03#c45e48e93e360542c2e1db6c6441a9e29b344b03"
 dependencies = [
  "aes-gcm",
  "async-trait",
