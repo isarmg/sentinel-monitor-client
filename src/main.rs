@@ -983,6 +983,11 @@ async fn camera_command(path: &Path, command: CameraCommand) -> anyhow::Result<(
             );
             return Ok(());
         }
+        CameraCommand::Discover { timeout_seconds } => {
+            let devices = onvif::discover(Duration::from_secs(timeout_seconds)).await?;
+            println!("{}", serde_json::to_string_pretty(&devices)?);
+            return Ok(());
+        }
         _ => {}
     }
     #[cfg(windows)]
@@ -990,8 +995,8 @@ async fn camera_command(path: &Path, command: CameraCommand) -> anyhow::Result<(
     validate_recording_store(&recording_root())?;
     let mut state = load_state(path)?;
     match command {
-        CameraCommand::Presets | CameraCommand::Devices => {
-            unreachable!("read-only catalog handled above")
+        CameraCommand::Presets | CameraCommand::Devices | CameraCommand::Discover { .. } => {
+            unreachable!("read-only discovery and catalogs handled above")
         }
         CameraCommand::Apply {
             instance_id,
@@ -1036,10 +1041,6 @@ async fn camera_command(path: &Path, command: CameraCommand) -> anyhow::Result<(
                 .context("camera instance is not paired")?;
             ensure!(instance.camera.take().is_some(), "camera is not configured");
             save_state(path, &state)?;
-        }
-        CameraCommand::Discover { timeout_seconds } => {
-            let devices = onvif::discover(Duration::from_secs(timeout_seconds)).await?;
-            println!("{}", serde_json::to_string_pretty(&devices)?);
         }
     }
     Ok(())
