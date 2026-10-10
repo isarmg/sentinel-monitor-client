@@ -11,8 +11,9 @@ extern "C" {
 
 /* These functions run only in an isolated, disposable media worker process.
  * They silence libav's process-global logger. Callers retain ownership of all
- * arguments, must supply valid NUL-terminated strings, and must kill/reap the
- * worker on cancellation. URLs are never passed to another process or logged.
+ * arguments and must supply valid NUL-terminated strings. Normal cancellation
+ * must request finalization before a bounded kill/reap fallback. URLs are never
+ * passed to another process or logged.
  * All functions return 0 on success and 1 on any failure, without error text.
  */
 int xcoc_media_check(void);
@@ -33,9 +34,12 @@ int xcoc_media_probe(const char *input, int rtsp, char *json_output,
  * the caller's strftime destination pattern. No stream is silently discarded.
  * Opening/discovery has a 12-second deadline; streaming operations have fresh
  * 5-second deadlines, so a healthy continuous stream has no total time limit.
+ * cancelled is a thread-safe, nonblocking callback, or NULL. Cancellation
+ * interrupts input/output I/O, then bounded trailer cleanup runs without the
+ * cancellation callback so an ordinary stop produces a playable final segment.
  */
 int xcoc_media_run(const char *input, int rtsp, const char *destination,
-                   int record);
+                   int record, int (*cancelled)(void));
 
 #ifdef __cplusplus
 }

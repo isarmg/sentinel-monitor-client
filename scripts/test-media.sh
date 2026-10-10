@@ -71,4 +71,5 @@ cargo build --locked --bin xcoc
 export XCOC_TEST_CLIENT_EXE="$(cd "${CARGO_TARGET_DIR:-target}/debug" && pwd)/xcoc"
 "$XCOC_TEST_CLIENT_EXE" media-worker --check
 cargo test --locked --lib local_camera::tests::one_capture -- --ignored
+cargo test --locked --bin xcoc native_recorders_finalize_on_shutdown_reload_and_disable -- --ignored
 cargo test --locked --lib rtsp_publish::tests::native_h264 -- --ignored

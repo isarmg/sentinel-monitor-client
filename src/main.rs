@@ -1123,6 +1123,7 @@ async fn run(
     let server_client = server_client()?;
     let device_client = device_client()?;
     let mut children: HashMap<String, Child> = HashMap::new();
+    let mut stopping_children = MediaTasks::new();
     let mut runtime = state
         .instances
         .iter()
@@ -1164,8 +1165,14 @@ async fn run(
             let mut changed = HashSet::new();
             let needs_reload = tick || config_fingerprint(path)? != config_stamp;
             if needs_reload {
-                changed =
-                    reload_configuration(path, &mut state, &mut runtime, &mut children).await?;
+                changed = reload_configuration(
+                    path,
+                    &mut state,
+                    &mut runtime,
+                    &mut children,
+                    &mut stopping_children,
+                )
+                .await?;
                 config_stamp = config_fingerprint(path)?;
             }
             if needs_reload {
@@ -1218,7 +1225,13 @@ async fn run(
                 collect_resolved_cameras(&mut resolve_tasks, &mut runtime)?;
                 launch_due_cameras(&device_client, &state, &mut runtime, &mut resolve_tasks);
                 // Local recording runs independently of Server snapshot success.
-                reconcile_local_recorders(&state, &mut runtime, &mut children).await;
+                reconcile_local_recorders(
+                    &state,
+                    &mut runtime,
+                    &mut children,
+                    &mut stopping_children,
+                )
+                .await;
             }
             let configured_instances = state
                 .instances
@@ -1344,7 +1357,8 @@ async fn run(
                     .flatten()
                     .cloned()
                     .collect::<Vec<_>>();
-                reconcile_publishers(&mut runtime, &grants, &mut children).await;
+                reconcile_publishers(&mut runtime, &grants, &mut children, &mut stopping_children)
+                    .await;
             }
             let mut completed = completed_command;
             loop {
@@ -1415,10 +1429,88 @@ async fn run(
             }
         }
     };
-    for (_, mut child) in children {
-        let _ = child.kill().await;
-    }
+    resolve_tasks.abort_all();
+    snapshot_tasks.abort_all();
+    command_tasks.abort_all();
+    finish_media_shutdown(children.into_values(), &mut stopping_children).await;
     outcome
+}
+
+#[derive(Default)]
+struct MediaTasks {
+    stopping: tokio::task::JoinSet<anyhow::Result<bool>>,
+    starting: tokio::task::JoinSet<anyhow::Result<Child>>,
+}
+
+impl MediaTasks {
+    fn new() -> Self {
+        Self::default()
+    }
+}
+
+async fn start_media_worker(
+    tasks: &mut MediaTasks,
+    start: impl std::future::Future<Output = anyhow::Result<Child>> + Send + 'static,
+) -> anyhow::Result<Child> {
+    // A pipe write/flush may still be pending after the child has begun media
+    // I/O (notably on Windows). Own startup before polling it, just like stop.
+    tasks.starting.spawn(start);
+    tasks
+        .starting
+        .join_next()
+        .await
+        .expect("one media startup was queued")
+        .context("media startup task failed")?
+}
+
+async fn finish_media_shutdown(children: impl IntoIterator<Item = Child>, tasks: &mut MediaTasks) {
+    for mut child in children {
+        tasks
+            .stopping
+            .spawn(async move { xcoc::media_worker::stop(&mut child).await });
+    }
+    while let Some(started) = tasks.starting.join_next().await {
+        match started {
+            Ok(Ok(mut child)) => {
+                tasks
+                    .stopping
+                    .spawn(async move { xcoc::media_worker::stop(&mut child).await });
+            }
+            _ => {
+                let _ = runtime_event(
+                    "xcoc.media.start_failed",
+                    None,
+                    xcsc::log::Level::Warn,
+                    "A media worker did not complete startup during shutdown.",
+                    "MEDIA_START_FAILED",
+                );
+            }
+        }
+    }
+    stop_media_children([], tasks).await;
+}
+
+async fn stop_media_children(children: impl IntoIterator<Item = Child>, stopping: &mut MediaTasks) {
+    // The run loop owns these tasks, so cancelling a reconciliation tick cannot
+    // drop an extracted Child and kill it in the middle of its MP4 trailer.
+    for mut child in children {
+        stopping
+            .stopping
+            .spawn(async move { xcoc::media_worker::stop(&mut child).await });
+    }
+    // Stop unrelated cameras together: one stalled device must not multiply
+    // the shutdown grace period by the number of configured media workers.
+    while let Some(result) = stopping.stopping.join_next().await {
+        if !matches!(result, Ok(Ok(false))) {
+            let _ = runtime_event(
+                "xcoc.media.stop_incomplete",
+                None,
+                xcsc::log::Level::Warn,
+                "A media worker could not finish normal shutdown; its last recording may be incomplete.",
+                "MEDIA_STOP_INCOMPLETE",
+            );
+        }
+    }
 }
 
 const MAX_INFLIGHT_COMMANDS: usize = 256;
@@ -1666,6 +1758,7 @@ async fn reload_configuration(
     state: &mut LocalState,
     runtime: &mut HashMap<Uuid, RuntimeCamera>,
     children: &mut HashMap<String, Child>,
+    stopping: &mut MediaTasks,
 ) -> anyhow::Result<HashSet<Uuid>> {
     let changed = apply_reloaded_state(state, load_state(path)?, runtime)?;
     let stale = children
@@ -1678,11 +1771,8 @@ async fn reload_configuration(
         })
         .cloned()
         .collect::<Vec<_>>();
-    for key in stale {
-        if let Some(mut child) = children.remove(&key) {
-            let _ = child.kill().await;
-        }
-    }
+    let stopped = stale.into_iter().filter_map(|key| children.remove(&key));
+    stop_media_children(stopped, stopping).await;
     Ok(changed)
 }
 
@@ -1802,6 +1892,7 @@ async fn reconcile_publishers(
     runtime: &mut HashMap<Uuid, RuntimeCamera>,
     grants: &[PublishGrant],
     children: &mut HashMap<String, Child>,
+    stopping: &mut MediaTasks,
 ) {
     let desired = grants
         .iter()
@@ -1812,11 +1903,8 @@ async fn reconcile_publishers(
         .filter(|key| key.ends_with(":publish") && !desired.contains(*key))
         .cloned()
         .collect::<Vec<_>>();
-    for key in stale {
-        if let Some(mut child) = children.remove(&key) {
-            let _ = child.kill().await;
-        }
-    }
+    let stopped = stale.into_iter().filter_map(|key| children.remove(&key));
+    stop_media_children(stopped, stopping).await;
 
     for grant in grants {
         let key = format!("{}:{}:publish", grant.camera_id, grant.profile);
@@ -1836,7 +1924,11 @@ async fn reconcile_publishers(
                 .and_then(|runtime| runtime.resolved.as_ref())
                 .expect("resolved camera was checked above")
                 .stream_source(&grant.profile)?;
-            spawn_publisher(&source, &grant.publish_url).await
+            let destination = grant.publish_url.clone();
+            start_media_worker(stopping, async move {
+                spawn_publisher(&source, &destination).await
+            })
+            .await
         }
         .await;
         match started {
@@ -1884,6 +1976,7 @@ async fn reconcile_local_recorders(
     state: &LocalState,
     runtime: &mut HashMap<Uuid, RuntimeCamera>,
     children: &mut HashMap<String, Child>,
+    stopping: &mut MediaTasks,
 ) {
     let desired = desired_local_recorders(state);
     let stale = children
@@ -1891,11 +1984,8 @@ async fn reconcile_local_recorders(
         .filter(|key| key.ends_with(":record") && !desired.contains(*key))
         .cloned()
         .collect::<Vec<_>>();
-    for key in stale {
-        if let Some(mut child) = children.remove(&key) {
-            let _ = child.kill().await;
-        }
-    }
+    let stopped = stale.into_iter().filter_map(|key| children.remove(&key));
+    stop_media_children(stopped, stopping).await;
 
     for camera in state
         .instances
@@ -1913,7 +2003,10 @@ async fn reconcile_local_recorders(
             else {
                 continue;
             };
-            match spawn_recorder(&source, camera.id).await {
+            let id = camera.id;
+            match start_media_worker(stopping, async move { spawn_recorder(&source, id).await })
+                .await
+            {
                 Ok(child) => {
                     entry.insert(child);
                 }

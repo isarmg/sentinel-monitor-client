@@ -80,6 +80,8 @@ jobs:
         uses: ./.github/actions/native-media
       - name: Check mobile release packaging contract
         run: python3 -m unittest discover -s packaging/mobile/tests
+      - name: Guard iOS capture lifecycle ordering
+        run: python3 scripts/test-ios-lifecycle.py
       - name: Check native packaging contract
         run: python3 -m unittest discover -s packaging/native/tests
       - name: Check formatting

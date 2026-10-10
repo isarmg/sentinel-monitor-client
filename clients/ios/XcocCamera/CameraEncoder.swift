@@ -4,43 +4,55 @@ import VideoToolbox
 final class CameraEncoder: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     private let queue = DispatchQueue(label: "xcoc.camera")
     private let session = AVCaptureSession()
+    private let lifecycle = CaptureGeneration()
     private var compressor: VTCompressionSession?
     private var running = false
     private var forceKeyframe = true
     var onFrame: ((Data, UInt64, Data, Data, Int, Int) -> Bool)?
     var onFailure: (() -> Void)?
 
-    func start(front: Bool) {
+    func start(front: Bool, owner: CaptureGeneration, generation: UUID) {
+        let captureGeneration = lifecycle.begin()
         queue.async {
             do {
-                guard !self.running else { return }
-                self.session.beginConfiguration()
-                defer { self.session.commitConfiguration() }
-                self.session.inputs.forEach { self.session.removeInput($0) }
-                self.session.outputs.forEach { self.session.removeOutput($0) }
-                guard self.session.canSetSessionPreset(.hd1280x720), let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: front ? .front : .back) else { throw RustBridge.NativeError.failed }
-                self.session.sessionPreset = .hd1280x720
-                let input = try AVCaptureDeviceInput(device: camera)
-                guard self.session.canAddInput(input) else { throw RustBridge.NativeError.failed }
-                self.session.addInput(input)
-                if camera.activeFormat.videoSupportedFrameRateRanges.contains(where: { $0.minFrameRate <= 30 && $0.maxFrameRate >= 30 }) {
-                    try camera.lockForConfiguration()
-                    camera.activeVideoMinFrameDuration = CMTime(value: 1, timescale: 30)
-                    camera.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: 30)
-                    camera.unlockForConfiguration()
-                }
-                let output = AVCaptureVideoDataOutput()
-                output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange]
-                output.alwaysDiscardsLateVideoFrames = true
-                output.setSampleBufferDelegate(self, queue: self.queue)
-                guard self.session.canAddOutput(output) else { throw RustBridge.NativeError.failed }
-                self.session.addOutput(output)
+                guard !self.running, self.lifecycle.isCurrent(captureGeneration), owner.isCurrent(generation) else { return }
+                try self.configureCapture(front: front)
+                guard self.lifecycle.isCurrent(captureGeneration), owner.isCurrent(generation) else { return }
                 self.running = true
-                self.queue.async { self.session.startRunning() }
-            } catch { self.running = false; self.onFailure?() }
+                // Configuration has committed. Keep physical start in this
+                // queue operation so a queued stop cannot be overtaken by it.
+                self.session.startRunning()
+            } catch {
+                self.running = false
+                if self.lifecycle.isCurrent(captureGeneration), owner.isCurrent(generation) { self.onFailure?() }
+            }
         }
     }
+    private func configureCapture(front: Bool) throws {
+        session.beginConfiguration()
+        defer { session.commitConfiguration() }
+        self.session.inputs.forEach { self.session.removeInput($0) }
+        self.session.outputs.forEach { self.session.removeOutput($0) }
+        guard self.session.canSetSessionPreset(.hd1280x720), let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: front ? .front : .back) else { throw RustBridge.NativeError.failed }
+        self.session.sessionPreset = .hd1280x720
+        let input = try AVCaptureDeviceInput(device: camera)
+        guard self.session.canAddInput(input) else { throw RustBridge.NativeError.failed }
+        self.session.addInput(input)
+        if camera.activeFormat.videoSupportedFrameRateRanges.contains(where: { $0.minFrameRate <= 30 && $0.maxFrameRate >= 30 }) {
+            try camera.lockForConfiguration()
+            camera.activeVideoMinFrameDuration = CMTime(value: 1, timescale: 30)
+            camera.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: 30)
+            camera.unlockForConfiguration()
+        }
+        let output = AVCaptureVideoDataOutput()
+        output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange]
+        output.alwaysDiscardsLateVideoFrames = true
+        output.setSampleBufferDelegate(self, queue: self.queue)
+        guard self.session.canAddOutput(output) else { throw RustBridge.NativeError.failed }
+        self.session.addOutput(output)
+    }
     func stop(completion: (() -> Void)? = nil) {
+        lifecycle.cancel()
         queue.async {
             self.running = false
             self.session.stopRunning()

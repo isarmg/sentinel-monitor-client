@@ -19,6 +19,287 @@ fn write_private_config(path: &Path, bytes: impl AsRef<[u8]>) {
     }
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn cancelling_reconciliation_preserves_owned_media_finalization() {
+    let directory = tempdir();
+    let finalized = directory.path().join("finalized");
+    let child = Command::new("sh")
+        .args(["-c", "read -r command; [ \"$command\" = stop ] || exit 1; sleep 0.1; printf finalized > \"$1\"", "fixture"])
+        .arg(&finalized)
+        .stdin(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let mut stopping = MediaTasks::new();
+    assert!(
+        tokio::time::timeout(
+            Duration::from_millis(10),
+            stop_media_children([child], &mut stopping),
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(stopping.stopping.len(), 1);
+    stop_media_children([], &mut stopping).await;
+    assert!(stopping.stopping.is_empty());
+    assert_eq!(fs::read(finalized).unwrap(), b"finalized");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn cancelling_pending_startup_retains_child_until_graceful_shutdown() {
+    let directory = tempdir();
+    let finalized = directory.path().join("finalized");
+    let destination = finalized.clone();
+    let release_flush = Arc::new(tokio::sync::Notify::new());
+    let flush = release_flush.clone();
+    let (spawned, ready) = tokio::sync::oneshot::channel();
+    let mut tasks = MediaTasks::new();
+    let mut start = Box::pin(start_media_worker(&mut tasks, async move {
+        let child = Command::new("sh")
+            .args([
+                "-c",
+                "read -r command; [ \"$command\" = stop ] || exit 1; printf finalized > \"$1\"",
+                "fixture",
+            ])
+            .arg(destination)
+            .stdin(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()?;
+        let _ = spawned.send(());
+        // Model Windows' pending async flush after the worker has started.
+        flush.notified().await;
+        Ok(child)
+    }));
+    tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::select! {
+            result = &mut start => panic!("startup returned before flush was released: {}", result.is_ok()),
+            result = ready => result.unwrap(),
+        }
+    }).await.unwrap();
+    drop(start); // Shutdown cancels the tick waiting for startup.
+    assert_eq!(tasks.starting.len(), 1);
+    release_flush.notify_one();
+    finish_media_shutdown([], &mut tasks).await;
+    assert!(tasks.starting.is_empty() && tasks.stopping.is_empty());
+    assert_eq!(fs::read(finalized).unwrap(), b"finalized");
+}
+
+/// Exercises the actual parent stop paths against the linked native worker,
+/// with synthetic media only. Each peer deliberately stalls instead of sending
+/// EOF, so only the private stop command can finalize the recording promptly.
+#[tokio::test]
+#[ignore = "requires ffmpeg/ffprobe and XCOC_TEST_CLIENT_EXE"]
+async fn native_recorders_finalize_on_shutdown_reload_and_disable() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let executable = PathBuf::from(std::env::var_os("XCOC_TEST_CLIENT_EXE").unwrap());
+    let fixture = tempdir();
+    let source = fixture.path().join("source.ts");
+    let generated = Command::new("ffmpeg")
+        .args([
+            "-nostdin",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=320x240:rate=10",
+            "-t",
+            "20",
+            "-c:v",
+            "libx264",
+            "-threads",
+            "1",
+            "-tune",
+            "zerolatency",
+            "-g",
+            "10",
+            "-f",
+            "mpegts",
+        ])
+        .arg(&source)
+        .output()
+        .await
+        .unwrap();
+    assert!(
+        generated.status.success(),
+        "synthetic media generation failed"
+    );
+    let data = fs::read(source).unwrap();
+
+    for mode in ["shutdown", "reload", "disable", "parent_pipe_closed"] {
+        let output = fixture.path().join(mode);
+        fs::create_dir(&output).unwrap();
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let bytes = data.clone();
+        let peer =
+            tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut header = Vec::new();
+                while !header.ends_with(b"\r\n\r\n") {
+                    header.push(socket.read_u8().await.unwrap());
+                }
+                socket.write_all(format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: video/mp2t\r\nContent-Length: {}\r\n\r\n",
+                bytes.len() + 1_000_000
+            ).as_bytes()).await.unwrap();
+                socket.write_all(&bytes).await.unwrap();
+                // Keep the connection open with no next packet. Normal stop must
+                // interrupt av_read_frame and then finish its MP4 trailer.
+                let _ = socket.read_u8().await;
+            });
+        let destination = output.join("%Y-%m-%d_%H-%M-%S.mp4");
+        let mut command = Command::new(&executable);
+        command
+            .arg("media-worker")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        #[cfg(unix)]
+        private_child_umask(&mut command);
+        let mut child = command.spawn().unwrap();
+        let mut diagnostics = child.stderr.take().unwrap();
+        let request = serde_json::json!({
+            "operation": "record", "source": format!("http://{address}/source"),
+            "rtsp": false, "destination": destination,
+        });
+        child
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(format!("{request}\n").as_bytes())
+            .await
+            .unwrap();
+
+        let file = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let file = fs::read_dir(&output)
+                    .unwrap()
+                    .next()
+                    .map(|entry| entry.unwrap().path());
+                if let Some(file) = file.filter(|file| file.metadata().unwrap().len() > 48) {
+                    break file;
+                }
+                assert!(
+                    child.try_wait().unwrap().is_none(),
+                    "recorder exited before stop"
+                );
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("recorder wrote synthetic packets before stop");
+        let camera_id = Uuid::new_v4();
+        let mut configured = camera(camera_id, "native recorder");
+        configured.storage_mode = StorageMode::Client;
+        let mut state = state_with(vec![configured]);
+        let mut runtime = HashMap::from([(camera_id, new_runtime_camera())]);
+        let mut children = HashMap::from([(format!("{camera_id}:main:record"), child)]);
+        let started = Instant::now();
+        let mut stopping = MediaTasks::new();
+        match mode {
+            "shutdown" => {
+                finish_media_shutdown(children.drain().map(|(_, child)| child), &mut stopping).await
+            }
+            "reload" => {
+                let mut next: LocalState =
+                    serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
+                next.instances[0].camera.as_mut().unwrap().name = "renamed".into();
+                let config = fixture.path().join("configuration.json");
+                write_private_config(&config, serde_json::to_vec(&next).unwrap());
+                reload_configuration(
+                    &config,
+                    &mut state,
+                    &mut runtime,
+                    &mut children,
+                    &mut stopping,
+                )
+                .await
+                .unwrap();
+            }
+            "disable" => {
+                state.instances[0].camera.as_mut().unwrap().enabled = false;
+                reconcile_local_recorders(
+                    &state,
+                    &mut runtime,
+                    &mut children,
+                    &mut MediaTasks::new(),
+                )
+                .await;
+            }
+            "parent_pipe_closed" => {
+                drop(children.values_mut().next().unwrap().stdin.take());
+                stop_media_children(children.drain().map(|(_, child)| child), &mut stopping).await;
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "{mode} did not interrupt stalled input"
+        );
+        assert!(children.is_empty());
+        let mut errors = Vec::new();
+        diagnostics.read_to_end(&mut errors).await.unwrap();
+        assert!(
+            errors.is_empty(),
+            "{mode} incorrectly reported a native shutdown error"
+        );
+        tokio::time::timeout(Duration::from_secs(1), peer)
+            .await
+            .unwrap()
+            .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(file.metadata().unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        let probe = Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "json",
+            ])
+            .arg(&file)
+            .output()
+            .await
+            .unwrap();
+        assert!(probe.status.success(), "{mode} left an invalid MP4");
+        let metadata: Value = serde_json::from_slice(&probe.stdout).unwrap();
+        assert!(
+            metadata["format"]["duration"]
+                .as_str()
+                .unwrap()
+                .parse::<f64>()
+                .unwrap()
+                > 0.0
+        );
+        let decoded = Command::new("ffmpeg")
+            .args(["-nostdin", "-v", "error", "-i"])
+            .arg(&file)
+            .args(["-map", "0", "-f", "null", "-"])
+            .output()
+            .await
+            .unwrap();
+        assert!(
+            decoded.status.success(),
+            "{mode} recording did not fully decode"
+        );
+        assert!(
+            decoded.stderr.is_empty(),
+            "{mode} recording has decode errors"
+        );
+    }
+}
+
 #[test]
 fn unconfigured_pairing_reports_an_empty_camera_list() {
     let instance = CameraInstance {
@@ -224,7 +505,13 @@ async fn publisher_waits_for_camera_resolution_and_retry_deadline() {
     };
     let mut runtime = HashMap::from([(camera_id, new_runtime_camera())]);
     let mut children = HashMap::new();
-    reconcile_publishers(&mut runtime, std::slice::from_ref(&grant), &mut children).await;
+    reconcile_publishers(
+        &mut runtime,
+        std::slice::from_ref(&grant),
+        &mut children,
+        &mut MediaTasks::new(),
+    )
+    .await;
     assert!(runtime.get(&camera_id).unwrap().error.is_none());
     assert!(children.is_empty());
 
@@ -248,7 +535,13 @@ async fn publisher_waits_for_camera_resolution_and_retry_deadline() {
     });
     current.mark_error("publisher exited".to_owned());
     let retry_at = current.retry_at;
-    reconcile_publishers(&mut runtime, &[grant], &mut children).await;
+    reconcile_publishers(
+        &mut runtime,
+        &[grant],
+        &mut children,
+        &mut MediaTasks::new(),
+    )
+    .await;
     assert_eq!(runtime.get(&camera_id).unwrap().retry_at, retry_at);
     assert!(children.is_empty());
 }
@@ -565,7 +858,7 @@ async fn recorder_is_not_restarted_while_camera_waits_to_reprobe() {
     let mut runtime = HashMap::from([(camera_id, current)]);
     let mut children = HashMap::new();
 
-    reconcile_local_recorders(&state, &mut runtime, &mut children).await;
+    reconcile_local_recorders(&state, &mut runtime, &mut children, &mut MediaTasks::new()).await;
 
     assert!(children.is_empty());
     assert_eq!(runtime.get(&camera_id).unwrap().retry_at, retry_at);

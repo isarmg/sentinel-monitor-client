@@ -4,7 +4,7 @@ use crate::device::MediaSource;
 use anyhow::{Context, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
-    io::{Read, Write},
+    io::{BufRead, Read, Write},
     path::Path,
     process::{ExitCode, Stdio},
     time::Duration,
@@ -20,6 +20,10 @@ const REQUEST_BYTES: usize = 64 * 1024;
 const PROBE_BYTES: usize = 256 * 1024;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 const START_TIMEOUT: Duration = Duration::from_secs(5);
+// Allow interrupted input I/O plus bounded trailer/RTSP teardown to finish.
+const STOP_TIMEOUT: Duration = Duration::from_secs(12);
+const REAP_TIMEOUT: Duration = Duration::from_secs(2);
+const STOP_COMMAND: &[u8; 5] = b"stop\n";
 
 #[derive(Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
 #[serde(rename_all = "snake_case")]
@@ -109,6 +113,12 @@ fn worker_command(executable: &Path) -> Command {
         .kill_on_drop(true);
     // Do not inherit optional FFmpeg report destinations or diagnostic flags.
     command.env_remove("FFREPORT");
+    // Terminal Ctrl+C belongs to the supervisor. A direct console signal must
+    // not terminate a recorder before it receives the private stop command.
+    #[cfg(unix)]
+    command.process_group(0);
+    #[cfg(windows)]
+    command.creation_flags(0x0000_0200); // CREATE_NEW_PROCESS_GROUP disables inherited CTRL_C.
     command
 }
 
@@ -119,14 +129,32 @@ async fn send_request(child: &mut Child, request: &Request) -> anyhow::Result<()
     let mut stdin = child.stdin.take().context("missing media input pipe")?;
     let result = tokio::time::timeout(START_TIMEOUT, async {
         stdin.write_all(&bytes).await?;
-        stdin.shutdown().await
+        stdin.write_all(b"\n").await?;
+        stdin.flush().await?;
+        if matches!(request.operation, Operation::Probe) {
+            stdin.shutdown().await?;
+        }
+        Ok::<_, std::io::Error>(())
     })
     .await;
-    drop(stdin);
     match result {
-        Ok(Ok(())) => Ok(()),
+        Ok(Ok(())) => {
+            if !matches!(request.operation, Operation::Probe) {
+                // The same private pipe carries a fixed stop command, never a
+                // second request or an endpoint in an OS-visible argument.
+                child.stdin = Some(stdin);
+            }
+            Ok(())
+        }
         failure => {
-            stop_and_reap(child).await?;
+            drop(stdin);
+            if matches!(request.operation, Operation::Probe) {
+                stop_and_reap(child).await?;
+            } else {
+                // The newline may have reached a recorder before an async
+                // flush failed/timed out. EOF requests trailer completion.
+                stop(child).await?;
+            }
             match failure {
                 Err(_) => Err(ProcessCaptureError::Timeout.into()),
                 Ok(Err(error)) => Err(error).context("media request pipe failed"),
@@ -252,6 +280,44 @@ async fn stop_and_reap(child: &mut Child) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Finalize a running media worker and reap it. Returns true only when a hard
+/// stop was required after the grace period; that segment may be incomplete.
+pub async fn stop(child: &mut Child) -> anyhow::Result<bool> {
+    stop_with_timeout(child, STOP_TIMEOUT).await
+}
+
+async fn stop_with_timeout(child: &mut Child, timeout: Duration) -> anyhow::Result<bool> {
+    if let Some(status) = child.try_wait().context("inspect media worker")? {
+        ensure!(status.success(), "media worker exited unsuccessfully");
+        return Ok(false);
+    }
+    let graceful = tokio::time::timeout(timeout, async {
+        if let Some(mut stdin) = child.stdin.take() {
+            // A closed pipe can mean the worker is already finalizing. Still
+            // wait for it rather than killing an MP4 during trailer writing.
+            let _ = stdin.write_all(STOP_COMMAND).await;
+            let _ = stdin.shutdown().await;
+        }
+        wait_for_exit(child).await
+    })
+    .await;
+    match graceful {
+        Ok(status) => {
+            ensure!(
+                status.context("reap media worker")?.success(),
+                "media worker failed during shutdown"
+            );
+            Ok(false)
+        }
+        Err(_) => {
+            tokio::time::timeout(REAP_TIMEOUT, stop_and_reap(child))
+                .await
+                .context("media worker did not reap after hard stop")??;
+            Ok(true)
+        }
+    }
+}
+
 /// Dispatch before normal CLI logging/runtime initialization. No raw native
 /// error, parser value, endpoint, or token can reach a public diagnostic.
 pub fn entry() -> ExitCode {
@@ -275,9 +341,11 @@ fn run_stdio() -> anyhow::Result<()> {
     let mut input = Zeroizing::new(Vec::new());
     std::io::stdin()
         .lock()
-        .take(REQUEST_BYTES as u64 + 1)
-        .read_to_end(&mut input)
+        .take(REQUEST_BYTES as u64 + 2)
+        .read_until(b'\n', &mut input)
         .context("read media request")?;
+    ensure!(input.last() == Some(&b'\n'), "incomplete media request");
+    input.pop();
     ensure!(input.len() <= REQUEST_BYTES, "media request is too large");
     let request: Request =
         serde_json::from_slice(&input).map_err(|_| anyhow::anyhow!("invalid media request"))?;
@@ -300,6 +368,13 @@ fn run_stdio() -> anyhow::Result<()> {
 mod native {
     use super::*;
     use std::ffi::{CString, c_char, c_int};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+    extern "C" fn stop_requested() -> c_int {
+        i32::from(STOP_REQUESTED.load(Ordering::Acquire))
+    }
     unsafe extern "C" {
         fn xcoc_media_check() -> c_int;
         fn xcoc_media_probe(
@@ -313,6 +388,7 @@ mod native {
             rtsp: c_int,
             destination: *const c_char,
             record: c_int,
+            cancelled: extern "C" fn() -> c_int,
         ) -> c_int;
     }
 
@@ -358,6 +434,22 @@ mod native {
             )?
             .into_bytes_with_nul(),
         );
+        // Only this disposable process owns the flag. Start listening before
+        // native I/O, and never reset it after a stop could have arrived.
+        std::thread::Builder::new()
+            .name("media-stop".into())
+            .spawn(|| {
+                let mut command = [0; STOP_COMMAND.len()];
+                let read = std::io::stdin().lock().read_exact(&mut command);
+                if (read.is_ok() && command == *STOP_COMMAND)
+                    || read.is_err_and(|error| error.kind() == std::io::ErrorKind::UnexpectedEof)
+                {
+                    // The supervisor disappearing closes this pipe. A worker
+                    // in its own process group must not become an orphan.
+                    STOP_REQUESTED.store(true, Ordering::Release);
+                }
+            })
+            .context("start media stop listener")?;
         // SAFETY: both NUL-terminated strings outlive this blocking call. The
         // shim retains neither pointer and releases all native media resources.
         let result = unsafe {
@@ -366,6 +458,7 @@ mod native {
                 i32::from(request.rtsp),
                 destination.as_ptr().cast(),
                 i32::from(matches!(request.operation, Operation::Record)),
+                stop_requested,
             )
         };
         ensure!(result == 0, "media transport failed");
@@ -448,7 +541,7 @@ mod tests {
             "rtsp://synthetic-user:synthetic-password@camera.invalid/main".into(),
         );
         let (_directory, executable) = fixture_worker(
-            "cat > \"$0.request\"\nprintf '%s' \"$*\" > \"$0.args\"\nprintf '{\"streams\":[]}'",
+            "IFS= read -r request\nprintf '%s' \"$request\" > \"$0.request\"\nprintf '%s' \"$*\" > \"$0.args\"\nprintf '{\"streams\":[]}'",
         );
         let bytes = probe(&executable, &source).await.unwrap();
         assert_eq!(bytes, b"{\"streams\":[]}");
@@ -528,5 +621,46 @@ mod tests {
             std::io::Error::last_os_error().raw_os_error(),
             Some(libc::ESRCH)
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn normal_stop_uses_private_control_pipe_and_waits_for_finalization() {
+        let (_directory, executable) = fixture_worker(
+            "IFS= read -r request\nIFS= read -r stop\n[ \"$stop\" = stop ] || exit 1\nsleep 0.05\nprintf finalized > \"$0.finalized\"",
+        );
+        let source = MediaSource::Rtsp("rtsp://camera.invalid/main".into());
+        let mut child = spawn_recorder(&executable, &source, &executable.with_extension("mp4"))
+            .await
+            .unwrap();
+        let pid = child.id().unwrap() as i32;
+        // SAFETY: getpgid only observes our live synthetic child. It must not
+        // share the foreground terminal group that receives supervisor Ctrl+C.
+        assert_eq!(unsafe { libc::getpgid(pid) }, pid);
+        assert!(!stop(&mut child).await.unwrap());
+        assert!(child.try_wait().unwrap().unwrap().success());
+        assert_eq!(
+            std::fs::read(executable.with_extension("finalized")).unwrap(),
+            b"finalized"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unresponsive_worker_is_killed_and_reaped_only_after_stop_deadline() {
+        let (_directory, executable) = fixture_worker("IFS= read -r request\nexec sleep 30");
+        let source = MediaSource::Rtsp("rtsp://camera.invalid/main".into());
+        let mut child = spawn_recorder(&executable, &source, &executable.with_extension("mp4"))
+            .await
+            .unwrap();
+        let started = std::time::Instant::now();
+        assert!(
+            stop_with_timeout(&mut child, Duration::from_millis(200))
+                .await
+                .unwrap()
+        );
+        assert!(started.elapsed() >= Duration::from_millis(200));
+        assert!(started.elapsed() < Duration::from_secs(3));
+        assert!(child.try_wait().unwrap().is_some());
     }
 }

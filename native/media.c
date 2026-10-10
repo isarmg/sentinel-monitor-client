@@ -27,6 +27,7 @@
 
 typedef struct MediaDeadline {
     int64_t until;
+    int (*cancelled)(void);
 } MediaDeadline;
 
 typedef struct JsonOutput {
@@ -56,7 +57,8 @@ static void deadline_after(MediaDeadline *deadline, int64_t duration) {
 
 static int deadline_expired(void *opaque) {
     const MediaDeadline *deadline = opaque;
-    return av_gettime_relative() >= deadline->until;
+    return (deadline->cancelled != NULL && deadline->cancelled()) ||
+           av_gettime_relative() >= deadline->until;
 }
 
 static int has_protocol(const char *wanted, int output) {
@@ -143,9 +145,12 @@ static int open_input(AVFormatContext **context, const char *url, int rtsp,
         goto done;
     }
     result = avformat_find_stream_info(*context, NULL);
-    if (result >= 0 &&
-        ((*context)->nb_streams == 0 || deadline_expired(deadline)))
-        result = AVERROR_INVALIDDATA;
+    if (result >= 0) {
+        if (deadline->cancelled != NULL && deadline->cancelled())
+            result = AVERROR_EXIT;
+        else if ((*context)->nb_streams == 0 || deadline_expired(deadline))
+            result = AVERROR_INVALIDDATA;
+    }
 done:
     av_dict_free(&options);
     return result;
@@ -185,7 +190,7 @@ static void json_string(JsonOutput *output, const char *text) {
 int xcoc_media_probe(const char *input, int rtsp, char *json_output,
                      size_t capacity) {
     AVFormatContext *context = NULL;
-    MediaDeadline deadline;
+    MediaDeadline deadline = {0};
     JsonOutput output;
     int result = 1;
 
@@ -323,7 +328,10 @@ static int read_packet(AVFormatContext *source, AVPacket *packet,
         if (status == AVERROR(EAGAIN))
             av_usleep(1000);
     } while (status == AVERROR(EAGAIN) && !deadline_expired(deadline));
-    return deadline_expired(deadline) ? AVERROR(ETIMEDOUT) : status;
+    if (deadline->cancelled != NULL && deadline->cancelled() &&
+        (status >= 0 || status == AVERROR(EAGAIN) || status == AVERROR_EXIT))
+        return AVERROR_EXIT;
+    return av_gettime_relative() >= deadline->until ? AVERROR(ETIMEDOUT) : status;
 }
 
 static int valid_packet_stream(const AVPacket *packet,
@@ -335,7 +343,7 @@ static int valid_packet_stream(const AVPacket *packet,
 }
 
 int xcoc_media_run(const char *input, int rtsp, const char *destination,
-                   int record) {
+                   int record, int (*cancelled)(void)) {
     AVFormatContext *source = NULL;
     AVFormatContext *output = NULL;
     AVPacket *packet = NULL;
@@ -346,7 +354,7 @@ int xcoc_media_run(const char *input, int rtsp, const char *destination,
     size_t pending_bytes = 0;
     int64_t input_epoch = 0;
     AVDictionary *options = NULL;
-    MediaDeadline deadline;
+    MediaDeadline deadline = {0, cancelled};
     int header_written = 0;
     int result = 1;
     int status;
@@ -357,8 +365,12 @@ int xcoc_media_run(const char *input, int rtsp, const char *destination,
         avformat_network_init() < 0)
         return 1;
     deadline_after(&deadline, XCOC_OPEN_TIMEOUT_US);
-    if (open_input(&source, input, rtsp, &deadline) < 0)
+    status = open_input(&source, input, rtsp, &deadline);
+    if (status < 0) {
+        if (status == AVERROR_EXIT && cancelled != NULL && cancelled())
+            result = 0;
         goto done;
+    }
     if (source->start_time != AV_NOPTS_VALUE)
         input_epoch = source->start_time;
     if (avformat_alloc_output_context2(&output, NULL,
@@ -386,8 +398,14 @@ int xcoc_media_run(const char *input, int rtsp, const char *destination,
          * Missing/malicious tracks cannot cause unbounded pre-header buffering. */
         deadline_after(&deadline, XCOC_OPEN_TIMEOUT_US);
         while (missing_aac_configuration(output)) {
-            if (pending_count == XCOC_PENDING_PACKETS ||
-                read_packet(source, packet, &deadline) < 0 ||
+            if (pending_count == XCOC_PENDING_PACKETS)
+                goto done;
+            status = read_packet(source, packet, &deadline);
+            if (status == AVERROR_EXIT && cancelled != NULL && cancelled()) {
+                result = 0;
+                goto done;
+            }
+            if (status < 0 ||
                 !valid_packet_stream(packet, source, output) ||
                 filter_aac_packet(filters, output, packet) < 0 ||
                 packet->size < 0 ||
@@ -416,18 +434,30 @@ int xcoc_media_run(const char *input, int rtsp, const char *destination,
     if (!(output->oformat->flags & AVFMT_NOFILE))
         goto done;
     deadline_after(&deadline, XCOC_OPEN_TIMEOUT_US);
-    if (avformat_write_header(output, &options) < 0)
+    status = avformat_write_header(output, &options);
+    if (status < 0) {
+        if (status == AVERROR_EXIT && cancelled != NULL && cancelled())
+            result = 0;
         goto done;
+    }
     header_written = 1;
-    if (av_dict_count(options) != 0 || deadline_expired(&deadline))
+    if (av_dict_count(options) != 0 || av_gettime_relative() >= deadline.until)
         goto done;
     av_dict_free(&options);
     for (;;) {
+        if (cancelled != NULL && cancelled()) {
+            result = 0;
+            break;
+        }
         if (pending_index < pending_count) {
             av_packet_move_ref(packet, pending[pending_index++]);
         } else {
             deadline_after(&deadline, XCOC_IO_TIMEOUT_US);
             status = read_packet(source, packet, &deadline);
+            if (status == AVERROR_EXIT && cancelled != NULL && cancelled()) {
+                result = 0;
+                break;
+            }
             if (status == AVERROR_EOF) {
                 result = 0;
                 break;
@@ -459,10 +489,13 @@ int xcoc_media_run(const char *input, int rtsp, const char *destination,
         deadline_after(&deadline, XCOC_IO_TIMEOUT_US);
         status = av_interleaved_write_frame(output, packet);
         /* This API takes packet ownership, including on error. */
-        if (status < 0 || deadline_expired(&deadline))
+        if (status < 0 || av_gettime_relative() >= deadline.until)
             goto done;
     }
 done:
+    /* A stop interrupts a blocking input read, but must not also interrupt the
+     * MP4 trailer. Keep its independent I/O deadline and the parent's fallback. */
+    deadline.cancelled = NULL;
     av_packet_free(&packet);
     for (unsigned int index = 0; index < pending_count; index++)
         av_packet_free(&pending[index]);

@@ -89,8 +89,24 @@ def run(mode, source=None, destination=None, rtsp=False, trust=False):
     else:
         env.pop("SSL_CERT_FILE", None)
     started = time.monotonic()
-    completed = subprocess.run(command, input=payload, text=True,
-                               capture_output=True, timeout=25, env=env)
+    process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, text=True, env=env)
+    stdin = process.stdin
+    try:
+        if payload:
+            stdin.write(payload + "\n")
+            stdin.flush()
+        # Keep the supervisor pipe alive while the worker completes naturally.
+        # communicate() must not close it and request graceful cancellation.
+        process.stdin = None
+        stdout, stderr = process.communicate(timeout=25)
+        completed = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+    except BaseException:
+        process.kill()
+        process.wait()
+        raise
+    finally:
+        stdin.close()
     expected_error = "" if completed.returncode == 0 else "media worker failed\n"
     assert completed.stderr == expected_error, "worker emitted unexpected diagnostics"
     if mode != "probe" or completed.returncode != 0:

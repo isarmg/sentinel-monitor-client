@@ -8,8 +8,10 @@ Type=simple
 ExecStart=/usr/local/bin/xcoc run --wait-for-config
 Restart=on-failure
 RestartSec=5s
-TimeoutStopSec=15s
-KillMode=control-group
+# The supervisor drains bounded in-flight reconciliation and finalizes its
+# recorders. Send the initial signal only to it; kill any stragglers afterward.
+TimeoutStopSec=25s
+KillMode=mixed
 UMask=0077
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 NoNewPrivileges=true

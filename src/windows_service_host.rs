@@ -71,7 +71,25 @@ fn serve() -> windows_service::Result<()> {
             handle.set_service_status(status(ServiceState::Running, ServiceExitCode::Win32(0)))?;
             tokio::runtime::Runtime::new().map_err(anyhow::Error::from)
         })
-        .and_then(|runtime| runtime.block_on(supervise_runtime(stop_receiver)));
+        .and_then(|runtime| {
+            runtime.block_on(async {
+                let mut stopping = Some(stop_receiver.clone());
+                let work = supervise_runtime(stop_receiver);
+                tokio::pin!(work);
+                tokio::select! {
+                    result = &mut work => result,
+                    _ = super::wait_for_shutdown(&mut stopping) => {
+                        let mut pending = status(ServiceState::StopPending, ServiceExitCode::Win32(0));
+                        pending.checkpoint = 1;
+                        pending.wait_hint = Duration::from_secs(25);
+                        // Status reporting must not cancel recorder finalization
+                        // if the service manager itself is already shutting down.
+                        let _ = handle.set_service_status(pending);
+                        work.await
+                    }
+                }
+            })
+        });
     if let Err(error) = &result {
         if super::runtime_event(
             "xcoc.windows.runtime_failed",

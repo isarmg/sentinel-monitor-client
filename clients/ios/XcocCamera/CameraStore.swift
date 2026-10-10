@@ -11,6 +11,7 @@ final class CameraStore: ObservableObject {
     private let control = DispatchQueue(label: "xcoc.control")
     private let lock = NSLock()
     private let encoder = CameraEncoder()
+    private let lifecycle = CaptureGeneration()
     private var handle: UInt64 = 0
     private var sps = Data()
     private var pps = Data()
@@ -49,23 +50,35 @@ final class CameraStore: ObservableObject {
                 guard allowed else { self.status = "请在系统设置中允许摄像头权限"; return }
                 guard !self.running, !self.stopping, UIApplication.shared.applicationState == .active else { return }
                 self.running = true; self.status = "正在启动摄像头"
+                let generation = self.lifecycle.begin()
                 self.control.async {
                     do {
+                        guard self.lifecycle.isCurrent(generation) else { return }
                         guard let data = try KeychainPairing.read("pairing"), let pairing = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw RustBridge.NativeError.failed }
                         let result = try RustBridge.call(0, ["operation": "open", "pairing": pairing])
                         guard let value = result["value"] as? NSNumber, value.uint64Value != 0 else { throw RustBridge.NativeError.failed }
+                        guard self.lifecycle.isCurrent(generation) else {
+                            _ = try? RustBridge.call(value.uint64Value, ["operation": "close"])
+                            return
+                        }
                         self.lock.lock(); self.handle = value.uint64Value; self.sps = Data(); self.pps = Data(); self.lock.unlock()
-                        self.encoder.start(front: front)
+                        self.encoder.start(front: front, owner: self.lifecycle, generation: generation)
                         let timer = DispatchSource.makeTimerSource(queue: self.control)
                         timer.schedule(deadline: .now() + 1, repeating: 3)
-                        timer.setEventHandler { [weak self] in self?.poll(active: true) }
+                        timer.setEventHandler { [weak self] in self?.poll(active: true, generation: generation) }
                         self.timer = timer; timer.resume()
-                    } catch { DispatchQueue.main.async { self.running = false; self.status = "配对不可读，请重新配对" } }
+                    } catch { DispatchQueue.main.async {
+                        guard self.lifecycle.isCurrent(generation) else { return }
+                        self.lifecycle.cancel(); self.running = false; self.status = "配对不可读，请重新配对"
+                    } }
                 }
             }
         }
     }
-    private func poll(active: Bool) {
+    private func poll(active: Bool, generation: UUID? = nil) {
+        if active {
+            guard let generation, lifecycle.isCurrent(generation) else { return }
+        }
         lock.lock()
         let current = handle, sps = self.sps, pps = self.pps, width = self.width, height = self.height
         lock.unlock()
@@ -80,7 +93,10 @@ final class CameraStore: ObservableObject {
         guard running else { return }
         // The encoder stops before the handle is destroyed; no camera frames survive stop.
         running = false; stopping = true; status = "正在停止摄像头"
+        lifecycle.cancel()
         control.async { self.timer?.cancel(); self.timer = nil }
+        // Capture stops independently of an in-flight network poll. A late
+        // encoder.start carries the cancelled owner generation and is rejected.
         encoder.stop { [weak self] in
             guard let self else { return }
             self.control.async {

@@ -3,6 +3,8 @@ set -eu
 
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 installer=$script_dir/../install.sh
+grep -qx 'KillMode=mixed' "$script_dir/../xcoc.service"
+grep -qx 'TimeoutStopSec=25s' "$script_dir/../xcoc.service"
 XCOC_INSTALL_SOURCE_ONLY=1
 export XCOC_INSTALL_SOURCE_ONLY
 # shellcheck disable=SC1090 # The tested installer path is computed from this script.
