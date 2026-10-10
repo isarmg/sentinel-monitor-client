@@ -9,6 +9,7 @@
 | [platform-setup.md](platform-setup.md) | Linux、Windows、macOS、Android、iOS 安装、配对/重配、服务或采集启停、诊断与卸载，含命令解释 |
 | [configuration.md](configuration.md) | 配对、RTSP/ONVIF 配置、热更新、授权码轮换和完整验证 |
 | [operations.md](operations.md) | 运行边界、录像位置、安全要求和故障定位 |
+| [media-worker.md](media-worker.md) | 内置媒体工作进程、凭据传输、原生库构建与发行依赖 |
 | [camera-support.md](camera-support.md) | 品牌预设、电脑摄像头和客户端 RTSP 协议转换 |
 | [mobile.md](mobile.md) | Android/iOS 原生采集、构建和操作 |
 | [camera-validation.md](camera-validation.md) | 本次摄像头扩展的验证结果与实机待验范围 |

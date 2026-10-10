@@ -294,7 +294,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires FFmpeg/FFprobe with libx264; run in media CI"]
+    #[ignore = "requires FFmpeg with libx264 and XCOC_TEST_CLIENT_EXE; run in media CI"]
     async fn one_capture_serves_simultaneous_probe_and_recording_then_releases_port() {
         use crate::device::{
             ControlTarget, DeviceCapabilities, DeviceIdentity, MediaSource, ResolvedDevice,
@@ -310,6 +310,8 @@ mod tests {
             "lavfi",
             "-i",
             "testsrc2=size=320x240:rate=10",
+            "-t",
+            "7",
             "-c:v",
             "libx264",
             "-tune",
@@ -340,41 +342,65 @@ mod tests {
             }],
         };
         let directory = tempfile::tempdir().unwrap();
-        let output = directory.path().join("recording.mp4");
-        let mut recorder = tokio::process::Command::new("ffmpeg");
-        recorder
-            .args(["-nostdin", "-v", "error"])
-            .args(source.input_args())
-            .args(["-t", "3", "-map", "0:v:0", "-c", "copy"])
-            .arg(&output);
-        let recording = xcsc::runtime::process::capture_bounded(
-            &mut recorder,
-            xcsc::runtime::process::ProcessLimits {
-                timeout: std::time::Duration::from_secs(20),
-                stdout_bytes: 65536,
-                stderr_bytes: 65536,
-            },
+        let executable = std::path::PathBuf::from(
+            std::env::var_os("XCOC_TEST_CLIENT_EXE").expect("built xcoc media worker fixture"),
         );
-        let (probe, recording) = tokio::join!(device.probe_streams(), recording);
-        if let Err(error) = probe {
-            let output = tokio::process::Command::new("ffprobe")
-                .args(source.input_args())
-                .args(["-v", "error", "-show_streams", "-of", "json"])
-                .output()
+        let pattern = directory.path().join("%Y-%m-%d_%H-%M-%S.mp4");
+        let recording = async {
+            let mut child = crate::media_worker::spawn_recorder(&executable, &source, &pattern)
                 .await
                 .unwrap();
-            panic!(
-                "synthetic probe: {error}; ffprobe: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
-        assert!(recording.unwrap().status.success());
+            tokio::time::timeout(std::time::Duration::from_secs(20), child.wait())
+                .await
+                .unwrap()
+                .unwrap()
+        };
+        let (probe, recording) = tokio::join!(device.probe_streams(&executable), recording);
+        probe.expect("synthetic worker probe");
+        // A finite capture stops the existing relay by aborting its HTTP
+        // readers. The worker must report this interrupted source as failure,
+        // while trailer cleanup preserves the completed recording. The old
+        // fixture's FFmpeg -t 3 instead stopped itself before capture ended.
+        assert!(!recording.success());
+        let outputs = std::fs::read_dir(directory.path())
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(outputs.len(), 1);
+        let output = outputs[0].path();
         assert_eq!(
             device.streams[0].descriptor.video_codec.as_deref(),
             Some("h264")
         );
         assert_eq!(device.streams[0].descriptor.width, Some(320));
         assert!(output.metadata().unwrap().len() > 1024);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                output.metadata().unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        let mut decoder = tokio::process::Command::new("ffmpeg");
+        decoder
+            .args(["-nostdin", "-v", "error", "-i"])
+            .arg(&output)
+            .args(["-map", "0", "-f", "null", "-"]);
+        let decoded = xcsc::runtime::process::capture_bounded(
+            &mut decoder,
+            xcsc::runtime::process::ProcessLimits {
+                timeout: std::time::Duration::from_secs(20),
+                stdout_bytes: 65536,
+                stderr_bytes: 65536,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(
+            decoded.status.success(),
+            "interrupted recording is not decodable"
+        );
         let address = url::Url::parse(&relay.url).unwrap();
         let port = address.port().unwrap();
         let task = relay.task.clone();

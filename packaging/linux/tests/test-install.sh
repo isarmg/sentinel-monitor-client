@@ -74,7 +74,12 @@ run_case() {
   source_unit=$case_root/source/xcoc.service
   target_binary=$case_root/target/bin/xcoc
   target_unit=$case_root/target/systemd/xcoc.service
-  printf 'new-binary\n' > "$source_binary"
+  cat > "$source_binary" <<'STUB'
+#!/bin/sh
+set -eu
+[ "$*" = 'media-worker --check' ] || exit 2
+[ "$TEST_FAIL_ON" != media-check ]
+STUB
   printf 'new-unit\n' > "$source_unit"
   chmod 755 "$source_binary"
   printf '%s\n' "$old_active" > "$TEST_STATE_DIR/active"
@@ -92,7 +97,7 @@ run_case() {
   fi
 
   if [ "$expected_success" = yes ]; then
-    assert_file_value "$target_binary" new-binary
+    cmp "$target_binary" "$source_binary" || fail "$name installed wrong binary"
     assert_file_value "$target_unit" new-unit
     assert_file_value "$TEST_STATE_DIR/active" yes
     assert_file_value "$TEST_STATE_DIR/enabled" "$desired_boot"
@@ -113,6 +118,7 @@ run_case() {
 }
 
 run_case upgrade_success yes yes yes no none yes
+run_case media_preflight_failure yes yes yes no media-check no
 run_case stop_failure yes yes yes no stop no
 run_case binary_copy_failure yes yes yes no install-binary no
 run_case unit_copy_failure yes yes yes no install-unit no

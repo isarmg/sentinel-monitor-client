@@ -9,7 +9,7 @@ enum RustBridge {
         let status = data.withUnsafeBytes { bytes in
             xcoc_call_v1(handle, bytes.bindMemory(to: UInt8.self).baseAddress, data.count, &result)
         }
-        guard status == 0, result.abi_revision == 2 else { throw NativeError.failed }
+        guard status == 0, result.abi_revision == 1 else { throw NativeError.failed }
         guard let pointer = result.bytes.data, result.bytes.length > 0 else { return ["value": result.value] }
         let output = Data(bytes: pointer, count: result.bytes.length)
         guard let value = try JSONSerialization.jsonObject(with: output) as? [String: Any] else { throw NativeError.failed }

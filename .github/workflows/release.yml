@@ -29,7 +29,7 @@ jobs:
             asset: xcoc-macos-arm64
             binary: target/release/xcoc
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - name: Check out exact tag without credentials
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -50,8 +50,16 @@ jobs:
         run: rustup toolchain install 1.99.0 --profile minimal
       - name: Verify locked client support boundary
         run: python scripts/check-xcsc-source.py
+      - name: Build reviewed native media libraries
+        uses: ./.github/actions/native-media
       - name: Build release binary
         run: cargo build --locked --release
+      - name: Verify system-only native media runtime
+        shell: bash
+        run: python packaging/native/check-runtime.py "${{ matrix.binary }}"
+      - name: Prepare native licenses and relinkable source
+        shell: bash
+        run: python packaging/native/package-source.py --work "$RUNNER_TEMP/xcoc-native" --asset "${{ matrix.asset }}" --output dist
       - name: Package Linux binary and systemd installer
         if: runner.os == 'Linux'
         shell: bash
@@ -59,20 +67,20 @@ jobs:
           mkdir -p dist
           tar -czf "dist/${{ matrix.asset }}.tar.gz" \
             "${{ matrix.binary }}" packaging/linux/install.sh \
-            packaging/linux/xcoc.service README.md LICENSE-APACHE
+            packaging/linux/xcoc.service README.md LICENSE-APACHE packaging/native/NOTICE.txt dist/native-licenses
       - name: Package macOS binary
         if: runner.os == 'macOS'
         shell: bash
         run: |
           mkdir -p dist
           tar -czf "dist/${{ matrix.asset }}.tar.gz" \
-            "${{ matrix.binary }}" README.md LICENSE-APACHE
+            "${{ matrix.binary }}" README.md LICENSE-APACHE packaging/native/NOTICE.txt dist/native-licenses
       - name: Package Windows binary
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Path dist | Out-Null
-          Compress-Archive -Path '${{ matrix.binary }}', README.md, LICENSE-APACHE -DestinationPath 'dist/${{ matrix.asset }}.zip'
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Compress-Archive -Path '${{ matrix.binary }}', README.md, LICENSE-APACHE, packaging/native/NOTICE.txt, dist/native-licenses -DestinationPath 'dist/${{ matrix.asset }}.zip'
           .\packaging\windows\build-installer.ps1 `
             -ClientExe "$PWD\${{ matrix.binary }}" `
             -Version $($env:GITHUB_REF_NAME.Substring(1)) `
@@ -81,12 +89,21 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ matrix.asset }}
-          path: dist/*
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.msi
           if-no-files-found: error
+
+  mobile:
+    name: Build mobile Release artifacts
+    permissions:
+      contents: read
+    uses: ./.github/workflows/mobile-release.yml
 
   publish:
     name: Publish GitHub Release
-    needs: build
+    needs: [build, mobile]
     permissions:
       contents: write
     runs-on: ubuntu-24.04

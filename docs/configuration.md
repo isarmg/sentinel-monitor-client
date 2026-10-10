@@ -12,7 +12,8 @@ Android/iOS 采集应用见[移动端指南](mobile.md)。这些输入统一转�
 
 | 命令 | 用途与影响 |
 |---|---|
-| `ffmpeg -version` / `ffprobe -version` | 核对采集/编码工具与码流探测工具已安装；后台也须能找到它们 |
+| `xcoc media-worker --check` | 无凭据检查内置媒体库是否可用；不连接摄像头或发布服务 |
+| `ffmpeg -version` | 仅内置/USB 摄像头使用的采集/编码命令；后台采集也须能找到它 |
 | `xcoc --version` | 查看本机客户端软件版本 |
 | `setup --interactive` | 交互配对，继续摄像头发现/录入和真实媒体验证；Windows 还配置并启动服务 |
 | `setup --input-stdin` | 从受保护 stdin JSON 配对；同实例新 token 可保留已有摄像头设置 |
@@ -34,13 +35,17 @@ Android/iOS 采集应用见[移动端指南](mobile.md)。这些输入统一转�
 
 ## 1. 前置条件
 
-客户端运行环境必须能找到同一发行套件中的 FFmpeg 和 FFprobe：
+桌面客户端使用链接的 FFmpeg 库完成探测、转发和分段录像，无需 `ffprobe` 命令。
+先检查内置媒体运行时；内置/USB 摄像头另需 `ffmpeg` 命令及对应采集后端和 `libx264`：
 
 ```sh
-ffmpeg -version
-ffprobe -version
 xcoc --version
+xcoc media-worker --check
+# 仅内置/USB 摄像头：
+ffmpeg -version
 ```
+
+库版本、静态构建与平台要求见[桌面媒体运行时](media-worker.md)。`--check` 只检查运行时能力，不证明摄像头、证书或网络配置正确。
 
 默认配置路径：
 
@@ -99,7 +104,7 @@ sudo xcoc status
 sudo shred -u /root/xcoc-bootstrap.json
 ```
 
-也可使用交互流程。它会检查 FFmpeg/FFprobe、完成配对，并继续引导发现或录入摄像头：
+也可使用交互流程。它会检查内置媒体运行时、完成配对，并继续引导发现或录入摄像头：
 
 ```sh
 sudo xcoc setup --interactive
@@ -107,7 +112,7 @@ sudo xcoc setup --interactive
 
 首次配对和 `setup --interactive --replace` 使用同一个 `Authorization code (visible)` 普通文本提示。输入或
 粘贴的授权码会在终端中明文回显，不提供遮罩、隐藏切换或特殊显示流程；随后配置摄像头时，摄像头密码仍
-使用隐藏输入。CLI 不会把授权码或摄像头密码写入自身日志、结果输出或启动参数。运行时 FFmpeg 子进程参数包含摄像头 RTSP 凭据，以及发布地址中的媒体 JWT；本机可查看进程参数的用户可能读到它们。Linux 部署应限制非特权用户读取其他进程的 `/proc`（例如 `hidepid=2`）并限制本机登录权限；客户端丢弃 FFmpeg 原始 stderr，避免它进入服务日志。
+使用隐藏输入。媒体工作进程只通过有界匿名 stdin 管道接收摄像头 RTSP 凭据、发布 URL/JWT 和私有回环地址；这些数据不进入进程参数、环境变量或临时凭据文件。客户端只报告安全的媒体错误，不输出底层库的原始日志。管理员或拥有服务进程调试/内存读取权限的账户仍可能读取运行中的秘密，必须限制本机账户、调试和配置访问权限。
 
 保存输出中的实例 UUID。一次安装可以保存多个实例，但每个实例只对应一台摄像机。
 
@@ -200,7 +205,7 @@ profile token 为空时由适配器选择媒体 ONVIF Profile。发现为空时�
 sudo xcoc run
 ```
 
-正式运行由 Linux 的 `xcoc.service` 或 Windows 的 `XcocClient` 服务负责。Linux 可用 `systemctl status xcoc.service` 核验；Windows 可用 `Get-Service XcocClient` 核验。配置热更新时重新执行 `camera apply`，运行中的客户端会读取新 revision 并重建对应 FFmpeg 进程，无需重启整个客户端。
+正式运行由 Linux 的 `xcoc.service` 或 Windows 的 `XcocClient` 服务负责。Linux 可用 `systemctl status xcoc.service` 核验；Windows 可用 `Get-Service XcocClient` 核验。配置热更新时重新执行 `camera apply`，运行中的客户端会读取新 revision 并重建对应媒体工作进程，无需重启整个客户端。
 
 完整成功需要同时确认：
 
@@ -245,14 +250,14 @@ sudo xcoc status
 
 Unix 配置读写使用 xcsc `ConfigurationDirectory`：文件必须是服务用户拥有、单链接的普通文件，权限为 `0600` 或受控 `0640`，父路径不能经过符号链接。读取在分配前检查 1 MiB 上限，替换先同步临时文件，再原子 rename 并同步目录。公开可读、硬链接、符号链接或过大文件会拒绝，错误不会反射被拒绝的摄像头凭据。已有合法 `0640` 配置保留其 group 与权限。Windows 继续使用受保护 ACL 和原子替换。
 
-运行错误使用 xcsc 内部 `xcsc::log` 输出 UTC JSON 行到 stderr；摄像头事件带规范化的 UUID `instance_id`，失败使用稳定 `error_code`。不输出摄像头密码、RTSP URL、内部错误链或 FFmpeg 原始 stderr。日志写入失败返回明确错误，服务宿主可观察退出。
+运行错误使用 xcsc 内部 `xcsc::log` 输出 UTC JSON 行到 stderr；摄像头事件带规范化的 UUID `instance_id`，失败使用稳定 `error_code`。不输出摄像头密码、RTSP URL、内部错误链或 媒体库原始日志或本地采集进程 stderr。日志写入失败返回明确错误，服务宿主可观察退出。
 
 
 ## 能力与工作预算
 
 `xcos-edge-v1` 使用 `supported`、`unsupported`、`unknown` 三态能力。尚未探测、设备离线或缺少肯定证据时报告 `unknown`；PTZ 只在所选 ONVIF Profile 和控制服务确认支持后提供。旧布尔线上协议不在正常运行入口接受。真实设备厂商与型号仍需分别完成探测、录像和控制验收。
 
-FFprobe 每次最多等待 12 秒，stdout 上限 256 KiB、stderr 上限 64 KiB；超限或超时立即终止并回收子进程，原始 stderr 不进入错误输出。ONVIF 发现只接受对应本次 MessageID 的响应，最多 256 个唯一设备，每个设备最多 8 个不含凭据的 HTTP 服务地址和 32 个 Scope；超限返回 `DISCOVERY_LIMIT_EXCEEDED` 和结构事件，不报告部分发现为完整成功。
+媒体探测在独立工作进程执行，输入、结果大小和执行时间均受预算限制；超限或超时会终止并回收工作进程，原始媒体库日志不进入错误输出。ONVIF 发现只接受对应本次 MessageID 的响应，最多 256 个唯一设备，每个设备最多 8 个不含凭据的 HTTP 服务地址和 32 个 Scope；超限返回 `DISCOVERY_LIMIT_EXCEEDED` 和结构事件，不报告部分发现为完整成功。
 
 快照携带必填 `command_capacity`，服务端只下发该容量内的动作。客户端全局最多 256 个未完成动作、每相机最多 8 个；待确认结果、去重记录及正在发送的预留容量共用 4096 条记录预算。容量为 0 时仍发送状态和已有结果；超量动作在执行前明确拒绝，不静默丢弃 PTZ，也不通过无限积累消耗其他相机的处理空间。命令失败使用 xcsc 安全错误呈现与静态产品消息；保存配对后发生的故障明确保留已提交证据与继续操作说明。
 

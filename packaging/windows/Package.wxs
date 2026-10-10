@@ -19,6 +19,8 @@
       <Directory Id="INSTALLFOLDER" Name="XcocClient">
         <Component Id="ClientProgram" Guid="5DC4202D-5451-4683-8FDC-35D4AC24B8FB" Bitness="always64">
           <File Id="ClientExe" Source="$(var.ClientExe)" Name="xcoc.exe" KeyPath="yes" />
+          <File Id="NativeNotice" Source="$(var.NativeNotice)" Name="NOTICE.txt" />
+          <File Id="NativeLicense" Source="$(var.NativeLicense)" Name="COPYING.LGPLv2.1.txt" />
           <Environment Id="XcocClientMachinePath" Name="PATH" Value="[INSTALLFOLDER]" Action="set" Part="last" Permanent="no" System="yes" />
           <RegistryValue Root="HKLM" Key="Software\sarmg\xcoc" Name="InstallLocation" Type="string" Value="[INSTALLFOLDER]" />
           <ServiceInstall Id="XcocServiceInstall" Name="XcocClient" DisplayName="xcoc" Description="Xcoc camera publishing, recording, and heartbeat service." Type="ownProcess" Start="auto" ErrorControl="normal" Arguments="--windows-service" />

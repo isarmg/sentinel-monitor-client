@@ -7,8 +7,7 @@ use anyhow::{Context, ensure};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{collections::HashSet, sync::Arc, time::Duration};
-use tokio::process::Command;
+use std::{collections::HashSet, sync::Arc};
 use url::Url;
 use uuid::Uuid;
 
@@ -189,24 +188,6 @@ pub enum MediaSource {
     Rtsp(String),
     Local(Arc<CaptureRelay>),
 }
-impl MediaSource {
-    pub fn input_args(&self) -> Vec<String> {
-        match self {
-            Self::Rtsp(url) => vec![
-                "-rtsp_transport".into(),
-                "tcp".into(),
-                "-i".into(),
-                url.clone(),
-            ],
-            Self::Local(relay) => vec![
-                "-rw_timeout".into(),
-                "5000000".into(),
-                "-i".into(),
-                relay.url.clone(),
-            ],
-        }
-    }
-}
 
 #[derive(Clone)]
 pub enum ControlTarget {
@@ -239,35 +220,15 @@ impl ResolvedDevice {
         }
     }
 
-    pub async fn probe_streams(&mut self) -> anyhow::Result<()> {
+    pub async fn probe_streams(&mut self, executable: &std::path::Path) -> anyhow::Result<()> {
         for stream in &mut self.streams {
-            let mut command = Command::new("ffprobe");
-            command.args(["-v", "error"]);
-            command.args(stream.source.input_args());
-            command.args([
-                "-read_intervals",
-                "%+#1",
-                "-show_entries",
-                "stream=codec_type,codec_name,width,height,r_frame_rate",
-                "-of",
-                "json",
-            ]);
-            let output = xcsc::runtime::process::capture_bounded(
-                &mut command,
-                xcsc::runtime::process::ProcessLimits {
-                    timeout: Duration::from_secs(12),
-                    stdout_bytes: 256 * 1024,
-                    stderr_bytes: 64 * 1024,
-                },
-            )
-            .await?;
-            ensure!(output.status.success(), "camera stream probe failed");
-            let document: Value = serde_json::from_slice(&output.stdout)
-                .context("ffprobe returned invalid stream metadata")?;
+            let output = crate::media_worker::probe(executable, &stream.source).await?;
+            let document: Value = serde_json::from_slice(&output)
+                .context("media worker returned invalid stream metadata")?;
             let streams = document
                 .get("streams")
                 .and_then(Value::as_array)
-                .context("ffprobe returned no stream metadata")?;
+                .context("media worker returned no stream metadata")?;
             let video = streams
                 .iter()
                 .find(|value| value.get("codec_type").and_then(Value::as_str) == Some("video"))

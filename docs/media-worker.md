@@ -1,0 +1,134 @@
+# 桌面媒体运行时
+
+桌面探测、网络摄像头发布和本地录像在同一个 `xcoc` 二进制的独立媒体工作进程中执行。
+工作进程通过 `native/media.c` 调用 `libavformat`、`libavcodec` 和 `libavutil`，不再调用
+`ffprobe`，也不再把网络摄像头或发布地址交给外部 `ffmpeg` 命令。Android/iOS 原生目标继续使用
+系统采集、编码器与共享 Rust 发布器，不编译或链接桌面 C shim。
+
+## 运行检查
+
+```sh
+xcoc media-worker --check
+```
+
+该维护入口只检查已链接的媒体库与必要协议/格式能力，不接收凭据、不连接设备、不写录像；成功
+返回退出码 0。它不会验证摄像头是否在线、账号密码、目标证书、实际设备后端或服务端播放能力。
+正常媒体工作由客户端内部启动，不应手工构造含凭据的命令或工作进程请求。
+
+网络 RTSP/ONVIF 摄像头无需系统 PATH 提供 `ffmpeg` 或 `ffprobe`。内置/USB 摄像头另需
+`ffmpeg` 命令，包含对应的 V4L2、DirectShow 或 AVFoundation 后端与 `libx264` 编码器；该命令
+只做本地采集和编码。应用使用的设备账户必须拥有摄像头权限，后台服务也必须能够找到该命令。
+详情见[摄像头兼容说明](camera-support.md)。
+
+## 凭据与进程边界
+
+- 父进程通过匿名 stdin 管道发送严格、大小受限的 JSON；摄像头 URL/密码、发布 JWT 和私有
+  回环地址不进入子进程 argv、环境变量或临时凭据文件。工作进程的参数固定为 `media-worker`。
+- 原始媒体库日志被抑制；父进程只接收有界探测结果或安全的静态错误。FFmpeg 的报告环境变量不
+  传给工作进程，避免自动生成带敏感内容的报告。
+- 本地采集 `ffmpeg` 的参数只包含受控设备选项与 `pipe:1`；编码视频通过匿名 stdout 管道进入
+  客户端的私有回环分发器。分发器仅监听 127.0.0.1，随机路径只通过媒体工作进程 stdin 传递。
+- 媒体库仍必须在内存中使用凭据。该设计消除进程命令行的凭据暴露，不提供对同一服务账户、
+  管理员或具备调试/内存读取权限账户的隔离。配置权限、服务账户、崩溃转储和本机登录仍需保护。
+
+工作进程请求最多 64 KiB，单个地址最多 16 KiB；探测结果最多 256 KiB。父进程发送 stdin 的期限为 5 秒；探测总期限
+为 15 秒，包含管道发送、库探测和等待子进程退出；库打开/探测阶段另有 12 秒中断期限。发布和录像
+持续进行，单次媒体 I/O 有期限；停止、超时或配置重建时由父进程终止并回收工作进程。
+
+## 码流与录像
+
+发布和录像使用码流复制，不为规避凭据传输而重新编码或只选择首个视频流。输入的所有码流都会
+交给目标封装器，包括 H.264、HEVC 和兼容音频；目标 RTSP/MP4 不支持的组合会明确失败，不能
+静默丢弃音轨后声称成功。浏览器能否播放 HEVC 或特定音频还取决于服务端及播放器。
+
+客户端录像继续使用 15 分钟 MP4 分段和现有目录布局。分段边界受输入关键帧位置影响；保留主/子
+码流、摄像头配置热更新和服务端离线时的本地录像，不新增配置迁移、旧命令回退或凭据临时文件。
+
+## 原生构建依赖
+
+正式桌面构建固定 FFmpeg 9.0.2，构建检查至少需要 `libavformat`/`libavcodec` 63.1.102 和 `libavutil` 61.1.102。
+版本信息见 [FFmpeg 官方发布说明](https://ffmpeg.org/download.html#releases)。
+生产发行按仓库脚本的固定版本与源码哈希构建，不直接使用随系统变化的媒体库。FFmpeg 7/8 的库
+不满足当前构建入口要求；系统 `ffmpeg -version` 不能证明 Rust 构建链接的是同一版本。
+
+正式桌面发行静态链接媒体库，安装后仍只有一个 `xcoc` 可执行文件，不需要另找 FFmpeg 动态库。
+操作系统库仍为平台依赖；这不表示跨系统/架构通用或完全静态的 Linux ELF。Linux 构建使用
+OpenSSL TLS 后端，macOS 使用系统 SecureTransport，Windows 使用系统 Schannel。
+本地采集命令是单独依赖，不包含在内置媒体库中。
+
+### Linux x86_64
+
+需要 Rust 1.99.0、C 编译器、make、curl、pkg-config、Python 3、tar/xz 和 OpenSSL 开发包及
+静态库。以 Debian/Ubuntu 构建机为例：
+
+```sh
+sudo apt update
+sudo apt install build-essential curl pkg-config python3 xz-utils libssl-dev binutils
+bash packaging/native/build-unix.sh "$PWD/target/native-media"
+export PKG_CONFIG_PATH="$PWD/target/native-media/lib/pkgconfig"
+cargo +1.99.0 build --locked --release
+python3 packaging/native/check-runtime.py ./target/release/xcoc
+```
+
+脚本固定并校验 FFmpeg 源码，禁用外部自动发现、程序、GPL/nonfree 组件和不需要的库，静态链接
+OpenSSL。发行审计须确认不存在额外 `libav*` 或 OpenSSL 动态依赖；安装构建机的旧版 `ffmpeg`
+命令不能替代此步骤。构建机的系统 C 库基线仍约束发行物能运行的 Linux 版本。
+
+### macOS arm64
+
+需要 Apple Silicon、Xcode Command Line Tools、Rust 1.99.0、Python 3、pkg-config 与 xz。
+已使用 Homebrew 的构建机可安装这些构建工具：
+
+```sh
+brew install pkg-config python xz
+bash packaging/native/build-unix.sh "$PWD/target/native-media"
+export PKG_CONFIG_PATH="$PWD/target/native-media/lib/pkgconfig"
+cargo +1.99.0 build --locked --release
+python3 packaging/native/check-runtime.py ./target/release/xcoc
+```
+
+脚本使用系统 SecureTransport，不链接 Homebrew FFmpeg/OpenSSL dylib。`brew install ffmpeg`
+只用于外部本地设备采集，不是这个构建过程的必需步骤。部署仍为手工安装 arm64 tar 包；必须在
+支持的 macOS 目标上检查实际系统框架和最低系统版本，不以 Linux 的构建结果代替。
+
+### Windows x64
+
+需要 Visual Studio C++ Build Tools/Windows SDK、Rust MSVC 工具链、PowerShell、Python 3 和 Git。
+原生脚本从官方来源获取固定 vcpkg revision，使用 `x64-windows-static` triplet，只选择 FFmpeg 的
+`avcodec`、`avformat` 功能与内置编解码器；Windows TLS 使用 Schannel。
+Rust 构建必须同时设置 `RUSTFLAGS=-C target-feature=+crt-static`，与原生静态 CRT 保持一致。
+不要混用动态 CRT triplet、另一个 vcpkg 安装树或任意下载的 FFmpeg DLL。
+
+在 x64 Native Tools PowerShell 中执行：
+
+```powershell
+. .\packaging\native\build-windows.ps1 -WorkDirectory "$PWD\target\native-media"
+cargo +1.99.0 build --locked --release
+python packaging/native/check-runtime.py target/release/xcoc.exe
+```
+
+脚本设置 `VCPKG_ROOT`、`VCPKG_INSTALLED_ROOT`、`VCPKGRS_TRIPLET` 和 `RUSTFLAGS`；必须在
+同一 PowerShell 会话中继续构建。依赖检查还会执行 `media-worker --check`。
+MSI 和 ZIP 使用同一个静态媒体库构建的单文件客户端，发布前必须完成依赖审计；DirectShow 摄像头另需 `ffmpeg.exe` 与 `libx264`。
+
+## 发行与验证边界
+
+构建与发行必须分别核对：
+
+1. 原生媒体库的版本、构建选项、TLS 支持和许可证与最终二进制一致。
+2. 目标平台执行 `xcoc media-worker --check`，并通过本机合成 RTSP/RTSPS、音视频复制和 MP4
+   分段测试；检查进程参数与日志不包含测试凭据。
+3. Linux 安装后的 systemd、Windows MSI 自定义目录与 SCM、macOS 手工安装后的实际二进制
+   均能启动；构建机通过不等于目标机器已部署成功。
+4. 通过 `packaging/native/check-runtime.py` 检查最终依赖，只允许预期的系统库；脚本在 Linux
+   使用 `readelf`，macOS 使用 `otool -L`，Windows 直接检查 PE 导入表。
+   若出现额外 FFmpeg/OpenSSL 动态库，修正构建输入后重新构建，不靠安装任意媒体工具掩盖问题。
+5. 保留并随发行提供原生依赖的许可证、准确源码、构建配置和必要的重新链接材料。FFmpeg 的
+   可选 GPL/nonfree 组件会改变分发条件；外部本地采集命令与直接链接库的依赖应分别审查。
+   Linux 的 OpenSSL 构建启用 FFmpeg LGPLv3，macOS/Windows 的系统 TLS 构建使用 LGPLv2.1；
+   各依赖自己的许可仍须一并保留。参见 [FFmpeg 官方许可说明](https://ffmpeg.org/legal.html)。
+
+Android/iOS 目标不需要上述 FFmpeg 库；在 Linux/macOS/Windows 宿主执行工作区测试或 JVM/JNI
+测试仍属于桌面编译，必须准备宿主原生媒体依赖。历史 FFmpeg 命令行测试、Linux 测试或静态
+WiX 定义检查均不替代本次最终源码的 Windows/macOS 原生验收。已完成的实测与未验范围分别
+记录在[摄像头验证记录](camera-validation.md)。

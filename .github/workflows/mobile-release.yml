@@ -1,0 +1,61 @@
+name: xcoc Mobile Release builds
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions: {}
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTUP_TOOLCHAIN: 1.99.0
+
+jobs:
+  android:
+    name: Android Release artifacts
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install 1.99.0 --profile minimal --target aarch64-linux-android
+      - run: python3 scripts/check-xcsc-source.py
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699
+        with:
+          packages: platform-tools
+      - run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;28.2.13676358"
+      - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb
+        with:
+          gradle-version: '8.13'
+      - run: cargo install cargo-ndk --version 4.1.2 --locked
+      - name: Build device Rust bridge
+        run: ANDROID_NDK_HOME="$ANDROID_HOME/ndk/28.2.13676358" bash scripts/build-android-rust.sh
+      - name: Build host media libraries for JNI tests
+        uses: ./.github/actions/native-media
+      - name: Build host bridge for JVM tests
+        run: cargo build --locked -p xcoc-mobile-ffi --features jni-host-tests
+      - uses: ./.github/actions/package-android-release
+
+  ios:
+    name: iOS Release artifacts
+    permissions:
+      contents: read
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install 1.99.0 --profile minimal --target aarch64-apple-ios,aarch64-apple-ios-sim
+      - run: python3 scripts/check-xcsc-source.py
+      - run: bash scripts/build-ios-rust.sh
+      - run: brew install xcodegen
+      - run: cd clients/ios && xcodegen generate
+      - uses: ./.github/actions/package-ios-release

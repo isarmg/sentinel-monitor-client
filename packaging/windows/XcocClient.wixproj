@@ -7,7 +7,7 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <ProductVersion Condition="'$(ProductVersion)' == ''">1.0.0</ProductVersion>
     <ClientExe Condition="'$(ClientExe)' == ''">$(MSBuildThisFileDirectory)..\..\target\x86_64-pc-windows-msvc\release\xcoc.exe</ClientExe>
-    <DefineConstants>ClientExe=$(ClientExe);ProductVersion=$(ProductVersion);LicenseRtf=$(MSBuildThisFileDirectory)License.rtf</DefineConstants>
+    <DefineConstants>ClientExe=$(ClientExe);ProductVersion=$(ProductVersion);LicenseRtf=$(MSBuildThisFileDirectory)License.rtf;NativeNotice=$(MSBuildThisFileDirectory)..\native\NOTICE.txt;NativeLicense=$(MSBuildThisFileDirectory)..\native\licenses\COPYING.LGPLv2.1</DefineConstants>
     <OutputName>xcoc-$(ProductVersion)-windows-x64</OutputName>
   </PropertyGroup>
   <ItemGroup>

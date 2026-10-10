@@ -408,6 +408,12 @@ impl RuntimeCamera {
 }
 
 fn main() -> std::process::ExitCode {
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|arg| arg == "media-worker")
+    {
+        return xcoc::media_worker::entry();
+    }
     match run_main() {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
@@ -812,17 +818,16 @@ fn parse_boot_start_choice(value: &str) -> anyhow::Result<bool> {
 }
 
 async fn preflight_media_tools() -> anyhow::Result<()> {
-    for tool in ["ffmpeg", "ffprobe"] {
-        let status = Command::new(tool)
-            .arg("-version")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .await
-            .with_context(|| format!("{tool} is required in the background service PATH"))?;
-        ensure!(status.success(), "{tool} preflight failed");
-    }
+    let status = Command::new(std::env::current_exe().context("locate media worker")?)
+        .args(["media-worker", "--check"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .status()
+        .await
+        .context("check media worker")?;
+    ensure!(status.success(), "media worker preflight failed");
     Ok(())
 }
 
@@ -914,7 +919,9 @@ async fn interactive_camera_setup(deadline: Instant) -> anyhow::Result<Camera> {
     };
     camera.validate()?;
     let mut resolved = camera.adapter().resolve(&device_client()?).await?;
-    resolved.probe_streams().await?;
+    resolved
+        .probe_streams(&std::env::current_exe().context("locate media worker")?)
+        .await?;
     Ok(camera)
 }
 
@@ -1822,15 +1829,16 @@ async fn reconcile_publishers(
         {
             continue;
         }
-        let started = (|| {
+        let started = async {
             validate_publish_url(&grant.publish_url)?;
             let source = runtime
                 .get(&grant.camera_id)
                 .and_then(|runtime| runtime.resolved.as_ref())
                 .expect("resolved camera was checked above")
                 .stream_source(&grant.profile)?;
-            spawn_publisher(&source, &grant.publish_url)
-        })();
+            spawn_publisher(&source, &grant.publish_url).await
+        }
+        .await;
         match started {
             Ok(child) => {
                 children.insert(key, child);
@@ -1905,7 +1913,7 @@ async fn reconcile_local_recorders(
             else {
                 continue;
             };
-            match spawn_recorder(&source, camera.id) {
+            match spawn_recorder(&source, camera.id).await {
                 Ok(child) => {
                     entry.insert(child);
                 }
@@ -1919,60 +1927,24 @@ async fn reconcile_local_recorders(
     }
 }
 
-fn spawn_publisher(source: &device::MediaSource, destination: &str) -> anyhow::Result<Child> {
-    Command::new("ffmpeg")
-        .args(["-nostdin", "-hide_banner", "-loglevel", "warning"])
-        .args(source.input_args())
-        .args([
-            "-map",
-            "0",
-            "-c",
-            "copy",
-            "-f",
-            "rtsp",
-            "-rtsp_transport",
-            "tcp",
-            "-tls_verify",
-            "1",
-            destination,
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .kill_on_drop(true)
-        .spawn()
-        .context("start ffmpeg publisher")
+async fn spawn_publisher(source: &device::MediaSource, destination: &str) -> anyhow::Result<Child> {
+    xcoc::media_worker::spawn_publisher(
+        &std::env::current_exe().context("locate media worker")?,
+        source,
+        destination,
+    )
+    .await
 }
 
-fn spawn_recorder(source: &device::MediaSource, camera_id: Uuid) -> anyhow::Result<Child> {
+async fn spawn_recorder(source: &device::MediaSource, camera_id: Uuid) -> anyhow::Result<Child> {
     let root = prepare_recording_directory(&recording_root(), camera_id)?;
     let pattern = root.join("%Y-%m-%d_%H-%M-%S.mp4");
-    let mut command = Command::new("ffmpeg");
-    command
-        .args(["-nostdin", "-hide_banner", "-loglevel", "warning"])
-        .args(source.input_args())
-        .args([
-            "-map",
-            "0",
-            "-c",
-            "copy",
-            "-f",
-            "segment",
-            "-segment_time",
-            "900",
-            "-reset_timestamps",
-            "1",
-            "-strftime",
-            "1",
-        ])
-        .arg(pattern)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .kill_on_drop(true);
-    #[cfg(unix)]
-    private_child_umask(&mut command);
-    command.spawn().context("start ffmpeg recorder")
+    xcoc::media_worker::spawn_recorder(
+        &std::env::current_exe().context("locate media worker")?,
+        source,
+        &pattern,
+    )
+    .await
 }
 
 fn prepare_recording_directory(store: &Path, camera_id: Uuid) -> anyhow::Result<PathBuf> {
@@ -2003,7 +1975,7 @@ fn prepare_recording_directory(store: &Path, camera_id: Uuid) -> anyhow::Result<
     Ok(directory)
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, test))]
 fn private_child_umask(command: &mut Command) {
     // SAFETY: umask only changes the forked child process and is async-signal-safe.
     unsafe {
@@ -2081,7 +2053,9 @@ fn launch_due_cameras(
                     Some(device) => device,
                     None => camera.adapter().resolve(&client).await?,
                 };
-                device.probe_streams().await?;
+                device
+                    .probe_streams(&std::env::current_exe().context("locate media worker")?)
+                    .await?;
                 Ok(device)
             })
             .await

@@ -5,9 +5,9 @@ options:
     iOS: "16.0"
 settings:
   base:
-    SWIFT_VERSION: "5.10"
+    SWIFT_VERSION: "5.0"
     MARKETING_VERSION: "1.0.0"
-    CURRENT_PROJECT_VERSION: "1000000"
+    CURRENT_PROJECT_VERSION: "1.0.0"
 targets:
   XcocCamera:
     type: application
@@ -20,6 +20,8 @@ targets:
       path: XcocCamera/Info.plist
       properties:
         CFBundleDisplayName: Xcoc Camera
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
         NSCameraUsageDescription: 用于将本机摄像头视频发布到您配对的 xcos。
     settings:

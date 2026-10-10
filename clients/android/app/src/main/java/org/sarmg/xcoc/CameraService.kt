@@ -48,7 +48,11 @@ class CameraService : Service() {
             .setContentTitle("Xcoc Camera").setContentText(message).setContentIntent(open).setOngoing(true)
             .addAction(Notification.Action.Builder(null, "停止摄像头", stop).build()).build()
     }
-    private fun report(message: String) { getSystemService(NotificationManager::class.java).notify(1, notification(message)) }
+    private fun report(message: String) {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
+        getSystemService(NotificationManager::class.java).notify(1, notification(message))
+    }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == "stop") { stopSelf(); return START_NOT_STICKY }
         if (started) return START_NOT_STICKY

@@ -4,7 +4,7 @@
 
 ## 1. 前置条件与状态文件
 
-当前版本为 `1.0.0`，需要 `ffmpeg` 与 `ffprobe` 均可从后台服务的 `PATH` 找到。默认配置路径为：
+当前版本为 `1.0.0`。先用 `xcoc media-worker --check` 检查内置媒体运行时；网络摄像头无需 `ffmpeg` 或 `ffprobe` 命令，内置/USB 摄像头另需后台服务能找到支持该设备后端与 `libx264` 的 `ffmpeg`。构建/库依赖见[桌面媒体运行时](media-worker.md)。默认配置路径为：
 
 - Linux：`/etc/isarmg/xcoc/config.json`
 - macOS：`/Library/Application Support/XcocClient/config.json`
@@ -13,12 +13,12 @@
 Linux 安装包解压后运行 `sudo ./packaging/linux/install.sh`，Windows 使用 MSI。安装全部功能并立即运行后台服务；Linux 的开机自启提示回车默认为 Yes，Windows 交互配对时的同名提示回车也默认为 Yes。非交互配对默认 Yes。服务会在尚未配对时等待配置。
 
 可用全局 `--config PATH` 指向其他文件。配置包含长期客户端 token、摄像头地址和可选账号密码，必须限制为服务
-账户可读；不要把配置、stdin bootstrap JSON 或带凭据的 RTSP URL 手工写入日志、CLI 启动参数或工单。FFmpeg 子进程命令行同时包含摄像头 RTSP 凭据和发布地址中的媒体 JWT，本机可查看进程参数的用户可能读到它们。Linux 部署应限制非特权用户读取其他进程的 `/proc`（例如使用 `hidepid=2`），并限制本机登录权限；客户端丢弃 FFmpeg 原始 stderr，避免它进入服务日志。
+账户可读；不要把配置、stdin bootstrap JSON 或带凭据的 RTSP URL 手工写入日志、CLI 启动参数或工单。摄像头凭据、发布 JWT 和私有回环地址通过有界匿名 stdin 管道传给媒体工作进程，不放入进程参数、环境变量或临时凭据文件；媒体库原始日志被抑制，本地采集进程 stderr 被丢弃。管理员及具备进程调试/内存读取权限的本机账户仍可能访问运行中的秘密，必须限制服务账户权限和本机登录。
 Windows 默认 `%ProgramData%\XcocClient` 的配置和录像由客户端收紧为仅 SYSTEM 和 Administrators 可读写内容；旧普通用户所有者无法重写 ACL。自定义 `--config` 的父目录不会自动调整权限，必须预先使用受保护的专用目录。Windows 配对已保存但服务未启动时，以管理员身份运行 `xcoc service`；若选择不开机自启，使用 `xcoc service --no-boot-start`，无需再次使用授权码。Windows MSI 升级可能将先前的不开机自启设置恢复为自动启动，升级后可重设。
 
 ## 2. 配对与摄像头配置
 
-交互式流程会先检查媒体工具，再完成配对、发现/录入摄像头并用真实 `ffprobe` 验证码流：
+交互式流程会先检查内置媒体运行时，再完成配对、发现/录入摄像头并通过媒体库实际验证码流：
 
 ```sh
 sudo xcoc setup --interactive
@@ -78,7 +78,7 @@ systemctl status xcoc.service
 ```
 
 Windows 用 `Get-Service XcocClient` 查看服务状态。`status` 只输出安装 ID、服务端、实例 ID、名称和是否已配置，不输出 token 或摄像头凭据。后台运行每两秒重新读取
-配置：`camera apply` 或 `camera remove` 后无需重启，受影响的 FFmpeg 子进程会停止并按新配置重建。
+配置：`camera apply` 或 `camera remove` 后无需重启，受影响的媒体工作进程会停止并按新配置重建。
 
 应分别核验：
 
@@ -94,11 +94,11 @@ Windows 用 `Get-Service XcocClient` 查看服务状态。`status` 只输出安�
 
 | 现象 | 核对项 |
 |---|---|
-| Setup 在请求前失败 | 后台服务 `PATH` 中的 `ffmpeg -version`、`ffprobe -version` |
+| Setup 在请求前失败 | `xcoc media-worker --check`；源码构建检查固定原生库与链接依赖；本地摄像头另检查服务 PATH 中的 `ffmpeg -version` |
 | `pairing_authorization_rejected` | 实例授权码是否有效、是否已配对、是否应先在服务端更换授权码 |
 | `pairing_protocol_unsupported` | 客户端与服务端是否都支持 `xcos-edge-v1` |
 | ONVIF 发现为空 | 客户端是否与摄像头同一可达网段，UDP 3702 组播是否被网络策略拦截 |
-| 配置已保存但画面离线 | 摄像头 URL/凭据、FFprobe 探测、服务端 RTSPS 证书和客户端到发布端口的连通性 |
+| 配置已保存但画面离线 | 摄像头 URL/凭据、内置媒体探测、服务端 RTSPS 证书和客户端到发布端口的连通性 |
 | 修改后服务端尚未更新 | `run` 是否仍在运行；等待下一次快照并检查该实例错误输出 |
 | `pairing_state_incompatible` | 不兼容的账户文件会保留；创建新授权码后运行 `setup --interactive --replace` 归档该文件并重新配对 |
 | `configuration_state_incompatible` | 当前摄像头配置不合法；文件已保留，不会被账户恢复流程清除 |

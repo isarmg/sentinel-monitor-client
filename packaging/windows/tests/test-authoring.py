@@ -34,3 +34,8 @@ assert service_control.attrib["Start"] == "install"
 assert service_control.attrib["Stop"] == "both"
 assert service_control.attrib["Remove"] == "uninstall"
 assert not tree.findall('.//w:RegistryValue[@Key="Software\\Microsoft\\Windows\\CurrentVersion\\Run"]', ns)
+
+# One executable, with the required static-library license notices.
+files = tree.findall(".//w:File", ns)
+assert [item.attrib["Name"] for item in files if item.attrib["Name"].endswith(".exe")] == ["xcoc.exe"]
+assert {item.attrib["Name"] for item in files} >= {"NOTICE.txt", "COPYING.LGPLv2.1.txt"}

@@ -7,12 +7,13 @@ Rust 固定 1.99.0；本轮选择 rand 0.10、base64 0.23、SHA-1/SHA-2 0.11，�
 | windows_config_acl::PrivateAcl | 管理员首次限制公开配置/录像目录，需要原生构造 protected DACL。descriptor 和 DACL 生命周期相同；失败和 Drop 通过 LocalFree 回收唯一原生分配。普通私有文件 opener 不具备这种行政修复权限。 | 固定 SDDL、有效输出参数，限制为 SYSTEM、Administrators 和仅 ReadControl 的 OwnerRights。 |
 | windows_config_acl::secure_path | 获取原生 link count 后对同一已打开文件调用 SetSecurityInfo。Windows 稳定 Rust 尚未提供安全的 link count API；不能删除 hardlink 校验。 | 用安全 OpenOptions/File 替换原始创建和所有权转移；保持祖先和最终对象无 DELETE sharing，拒绝 reparse 和多链接文件。 |
 | Windows ACL 测试 | 从 SDK 返回的 security descriptor 读取并释放 SDDL 字符串，检查实际权限而非模拟值。 | 存活的分配和显式返回长度；真实 hardlink 与祖先 junction 拒绝测试，确认原对象 ACL 和字节不变。 |
-| main::private_child_umask | std::process 的 Unix pre_exec 本身是 unsafe；子进程在 exec 前只调用 async-signal-safe umask，让 ffmpeg 新录像具有私有模式。 | 不分配、不获取锁、不修改父进程；普通运行期配置、日志和命令 ledger 使用安全共享文件 API。 |
+| media_worker::spawn 的 Unix pre_exec | std::process 的 pre_exec 本身是 unsafe；子进程在 exec 前只调用 async-signal-safe umask，让媒体工作进程的新录像具有私有模式。 | 不分配、不获取锁、不修改父进程；普通运行期配置、日志和命令 ledger 使用安全共享文件 API。 |
+| media_worker::native 与 native/media.c | 桌面媒体库 API 通过小型 C shim 调用；Rust 传入存活的 NUL 结尾字符串与显式长度输出缓冲，shim 不保留调用方指针。 | 原生对象在各返回路径释放；工作进程隔离全局日志设置和库故障，父进程负责取消、超时、终止与回收。Android/iOS 目标不链接此 shim。 |
 | mobile-ffi::xcoc_call_v1 / xcoc_frame_v1 | 平台调用者提供 live 长度限定缓冲和已初始化结果；xcsc v1 检查输入预算、隔离 panic、管理代际句柄与结果所有权。帧在返回前复制到有界队列。 | 不保留原生缓冲指针；检查错误、过期句柄、结果释放及 JNI bridge 编译。 |
 
 `MetadataExt::number_of_links` 在 Rust 1.99 仍属于 nightly API，故保留小范围 Win32 元数据调用，不引入 nightly 工具链。[Rust 官方 MetadataExt](https://doc.rust-lang.org/stable/std/os/windows/fs/trait.MetadataExt.html#tymethod.number_of_links)。`OpenOptionsExt::share_mode` 可安全控制删除/重命名共享，因此已用于祖先及最终句柄。[Rust 官方 OpenOptionsExt](https://doc.rust-lang.org/stable/std/os/windows/fs/trait.OpenOptionsExt.html#tymethod.share_mode)。
 
-所有保留 unsafe 块均说明调用和所有权条件。网络、PTZ、命令恢复、日志过滤和进程输出预算的业务逻辑使用安全 Rust。原生 CI 必须针对实际最终源码；Linux 结果不代替 Windows 权限证明。
+所有保留 unsafe 块均说明调用和所有权条件。PTZ、命令恢复、日志过滤和进程输入/输出预算的业务逻辑使用安全 Rust；桌面媒体解析与收发使用原生 FFmpeg 库，安全边界包含 C shim、上游库以及独立进程的生命周期管理。原生 CI 必须针对实际最终源码；Linux 结果不代替 Windows 权限证明。
 
 当前共享 xcsc 输入为 1.0.0 / c45e48e93e360542c2e1db6c6441a9e29b344b03，来自正式 v1.0.0 标签；产品按自身最终源码独立执行平台验证。
 中立日志 xcsc::log 随单体 xcsc 固定为 1.0.0 / c45e48e93e360542c2e1db6c6441a9e29b344b03，来自正式 v1.0.0 标签，精确 Git 来源与 Cargo.lock 一致。
@@ -37,11 +38,13 @@ Android APK、iOS Swift/Xcode 和实机摄像头分别以目标平台检查为�
 | 适用条款 | 当前实现与本轮验收 | 真实限制 |
 |---|---|---|
 | 2–5、19：职责、目录与身份 | 单Rust包保留 src 的摄像头适配、命令ledger、CLI及平台服务职责；config、protocol、packaging、tests、docs各有统一用途。edge v1定义来自固定服务端契约及hash校验，与1.0.0软件号和本地format分开。 | 客户端不含Web或服务端运行库；中性日志是编译leaf。 |
-| 6–9、11–14、17：安全、命令和摄像头 | 秘密由stdin/受保护配置进入，授权与实际PTZ/RTSP/ONVIF能力分别核验；不做授权外的探测副作用。异步命令先持久intent；未确认PTZ报告unknown，重连/重复交付不第二次驱动摄像头。ffmpeg/ffprobe有超时/输出/录像预算。 | 外部设备适配由实际协议能力决定；厂商实机、真实RTSP与ONVIF环境需另外验收。 |
-| 15：日志 | 类型化的产品事件携带instance/task身份；过滤与轮转消费公共实现，不把摄像头凭据写入日志。 | ffmpeg外部进程参数包含RTSP凭据，既有实际边界在README公开；不虚称外部进程参数已隐藏。 |
-| 20–23：验证与发行 | Mac 70个常规Rust用例、2个真实合成媒体用例与严格 Clippy通过；Linux安装器11个成功/失败/恢复夹具和Windows WiX 安装器定义静态检查通过。最终包按源码、hash、产品版本验收。 | shell/WiX模拟不代替Linux系统服务、Windows实际MSI/SCM/ACL及摄像头设备路径。 |
+| 6–9、11–14、17：安全、命令和摄像头 | 秘密由stdin/受保护配置进入，授权与实际PTZ/RTSP/ONVIF能力分别核验；不做授权外的探测副作用。异步命令先持久intent；未确认PTZ报告unknown，重连/重复交付不第二次驱动摄像头。内置媒体工作进程有输入/输出、超时与录像预算；设备采集命令不接收网络凭据。 | 外部设备适配由实际协议能力决定；厂商实机、真实RTSP与ONVIF环境需另外验收。 |
+| 15：日志 | 类型化的产品事件携带instance/task身份；过滤与轮转消费公共实现，不把摄像头凭据写入日志。 | RTSP凭据、发布JWT与回环地址仅经有界匿名管道进入媒体工作进程，底层媒体日志被抑制；管理员或具有进程调试/内存权限的本机账户仍在信任边界内。 |
+| 20–23：验证与发行 | 历史记录包括 Mac 70个常规Rust用例、2个真实合成媒体用例与严格 Clippy，Linux安装器11个夹具和Windows WiX 定义检查；它们不构成本次媒体库重构的通过证明。最终包按最终源码、hash、产品版本独立验收。 | shell/WiX模拟不代替Linux系统服务、Windows实际MSI/SCM/ACL及摄像头设备路径。 |
 
 ## 1.0.0 更新
+
+以下为本次媒体库重构前的历史更新；其中 FFmpeg/FFprobe 子进程已由当前内置媒体工作进程取代，本地设备采集仍使用无网络凭据的 FFmpeg 命令。
 
 消费 xcsc 1.0.0 的有界子进程回收修复：继承屏蔽的 SIGCHLD 不再令已经退出的
 FFmpeg/FFprobe 耗尽捕获期限。xcsc 1.0.0 的客户端日志保持历史 0.11.4 引入的 Windows

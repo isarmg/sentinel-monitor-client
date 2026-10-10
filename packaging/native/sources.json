@@ -1,0 +1,16 @@
+{
+  "ffmpeg": {
+    "version": "9.0.2",
+    "url": "https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz",
+    "sha256": "8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e",
+    "signature_url": "https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz.asc",
+    "release_key_fingerprint": "FCF986EA15E6E293A5644F10B4322F04D67658D8",
+    "signature_verified_utc": "2026-10-10"
+  },
+  "vcpkg": {
+    "url": "https://github.com/microsoft/vcpkg.git",
+    "revision": "e456309491fd875487bf02b8a0dca76c1b1b00cc",
+    "ffmpeg_port_version": "9.0.2#1",
+    "triplet": "x64-windows-static"
+  }
+}

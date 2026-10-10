@@ -10,3 +10,7 @@
 /clients/ios/DerivedData/
 /clients/ios/*.xcodeproj/
 /clients/ios/XcocCamera/Info.plist
+
+/dist/
+/clients/ios/ReleaseBuild/
+__pycache__/

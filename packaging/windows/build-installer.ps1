@@ -8,6 +8,8 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $client = (Resolve-Path -LiteralPath $ClientExe).Path
+& python (Join-Path $root 'packaging\native\check-runtime.py') $client
+if ($LASTEXITCODE) { throw 'The client does not have a self-contained native media runtime.' }
 $outputDirectory = [IO.Path]::GetFullPath($Output)
 New-Item -ItemType Directory -Force -Path $outputDirectory | Out-Null
 $intermediate = Join-Path $env:RUNNER_TEMP ('xcoc-wix-' + [guid]::NewGuid())

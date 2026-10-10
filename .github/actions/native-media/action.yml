@@ -1,0 +1,23 @@
+name: Build reviewed native media libraries
+description: Statically link pinned FFmpeg while keeping desktop releases self-contained.
+runs:
+  using: composite
+  steps:
+    - name: Install Linux build prerequisites
+      if: runner.os == 'Linux'
+      shell: bash
+      run: sudo apt-get update && sudo apt-get install -y build-essential binutils curl libssl-dev pkg-config xz-utils
+    - name: Install macOS build prerequisites
+      if: runner.os == 'macOS'
+      shell: bash
+      run: brew list pkgconf >/dev/null 2>&1 || brew install pkgconf
+    - name: Build Unix static media libraries
+      if: runner.os != 'Windows'
+      shell: bash
+      run: |
+        bash packaging/native/build-unix.sh "$RUNNER_TEMP/xcoc-native/install" "$RUNNER_TEMP/xcoc-native/source"
+        echo "PKG_CONFIG_PATH=$RUNNER_TEMP/xcoc-native/install/lib/pkgconfig" >> "$GITHUB_ENV"
+    - name: Build Windows static media libraries and CRT
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: .\packaging\native\build-windows.ps1 -WorkDirectory "$env:RUNNER_TEMP\xcoc-native"

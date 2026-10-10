@@ -1,0 +1,18 @@
+xcoc native media notices
+
+The xcoc application source is licensed under Apache-2.0.
+Desktop releases include statically linked FFmpeg 9.0.2 libraries from
+https://ffmpeg.org/ (copyright the FFmpeg developers and contributors).
+No GPL-only or nonfree FFmpeg components are enabled.
+
+The Linux build uses FFmpeg under LGPL-3.0-or-later and includes OpenSSL
+under Apache-2.0. macOS and Windows use FFmpeg under LGPL-2.1-or-later with
+the operating system's TLS implementation. See the accompanying licenses
+and dependency copyright notices for the complete terms.
+
+Each platform release is accompanied by an xcoc-<platform>-relink-source.tar.gz
+archive. It contains the corresponding xcoc source, vendored Rust dependencies,
+FFmpeg source and build configuration, native archives, and rebuild instructions.
+You may modify and relink these libraries. Nothing in the xcoc application
+license restricts reverse engineering for debugging modifications to LGPL
+components. Read docs/media-worker.md and SOURCE-BUILD.txt in that archive.

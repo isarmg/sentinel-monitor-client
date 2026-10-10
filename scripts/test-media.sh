@@ -67,5 +67,8 @@ export XCOC_TEST_PUBLISH_URL='rtsps://localhost:18322/mobile-test?jwt=fixture'
 export XCOC_TEST_READ_URL='rtsp://127.0.0.1:17554/mobile-test'
 export XCOC_TEST_CERT_DER="$fixture/server.der"
 export XCOC_TEST_H264="$fixture/source.h264"
+cargo build --locked --bin xcoc
+export XCOC_TEST_CLIENT_EXE="$(cd "${CARGO_TARGET_DIR:-target}/debug" && pwd)/xcoc"
+"$XCOC_TEST_CLIENT_EXE" media-worker --check
 cargo test --locked --lib local_camera::tests::one_capture -- --ignored
 cargo test --locked --lib rtsp_publish::tests::native_h264 -- --ignored

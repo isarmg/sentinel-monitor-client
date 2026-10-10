@@ -66,7 +66,7 @@ jobs:
     permissions:
       contents: read
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Check out source without credentials
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -76,6 +76,12 @@ jobs:
         run: rustup toolchain install 1.99.0 --profile minimal --component rustfmt,clippy
       - name: Verify locked client support boundary
         run: python scripts/check-xcsc-source.py
+      - name: Build reviewed native media libraries
+        uses: ./.github/actions/native-media
+      - name: Check mobile release packaging contract
+        run: python3 -m unittest discover -s packaging/mobile/tests
+      - name: Check native packaging contract
+        run: python3 -m unittest discover -s packaging/native/tests
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Lint all targets
@@ -88,8 +94,8 @@ jobs:
         run: sh -n packaging/linux/install.sh
       - name: Test Linux installer rollback
         run: sh packaging/linux/tests/test-install.sh
-      - name: Check mobile build scripts
-        run: bash -n scripts/build-android-rust.sh scripts/build-ios-rust.sh
+      - name: Check build and media scripts
+        run: bash -n scripts/build-android-rust.sh scripts/build-ios-rust.sh scripts/test-media.sh packaging/native/build-unix.sh
       - name: Install media validation tools
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - name: Fetch reviewed media companion
@@ -99,6 +105,8 @@ jobs:
           tar -xzf "$RUNNER_TEMP/xcoc-media/archive.tar.gz" -C "$RUNNER_TEMP/xcoc-media"
       - name: Validate native H264 conversion against media companion
         run: XCOC_TEST_MEDIAMTX="$RUNNER_TEMP/xcoc-media/mediamtx" bash scripts/test-media.sh
+      - name: Validate private native audio, HEVC, and TLS media paths
+        run: python3 scripts/test-native-media.py "$PWD/target/debug/xcoc"
 
   android:
     needs: scope
@@ -107,7 +115,7 @@ jobs:
     permissions:
       contents: read
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -129,9 +137,13 @@ jobs:
       - run: cargo install cargo-ndk --version 4.1.2 --locked
       - name: Build native publisher
         run: ANDROID_NDK_HOME="$ANDROID_HOME/ndk/28.2.13676358" bash scripts/build-android-rust.sh
+      - name: Build reviewed host media libraries
+        uses: ./.github/actions/native-media
       - name: Build host bridge for JVM boundary tests
         run: cargo build --locked -p xcoc-mobile-ffi --features jni-host-tests
       - run: gradle -p clients/android testDebugUnitTest assembleDebug lintDebug
+      - name: Build and retain Android Release artifacts
+        uses: ./.github/actions/package-android-release
 
   ios:
     needs: scope
@@ -140,7 +152,7 @@ jobs:
     permissions:
       contents: read
     runs-on: macos-15
-    timeout-minutes: 40
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -155,6 +167,8 @@ jobs:
         run: |
           simulator_id="$(xcrun simctl list devices available -j | python3 -c 'import json,sys; print(next(d["udid"] for group in json.load(sys.stdin)["devices"].values() for d in group if d.get("isAvailable") and d["name"].startswith("iPhone")))')"
           xcodebuild -project clients/ios/XcocCamera.xcodeproj -scheme XcocCamera -sdk iphonesimulator -destination "id=$simulator_id" CODE_SIGNING_ALLOWED=NO -derivedDataPath clients/ios/DerivedData test
+      - name: Build and retain iOS Release artifacts
+        uses: ./.github/actions/package-ios-release
 
   native-build:
     needs: scope
@@ -173,7 +187,7 @@ jobs:
           - name: macOS arm64
             os: macos-15
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Documentation-only change
         if: ${{ needs.scope.outputs.run_full == 'false' }}
@@ -190,9 +204,19 @@ jobs:
       - name: Verify locked client support boundary
         if: ${{ needs.scope.outputs.run_full != 'false' }}
         run: python scripts/check-xcsc-source.py
+      - name: Build reviewed native media libraries
+        if: ${{ needs.scope.outputs.run_full != 'false' }}
+        uses: ./.github/actions/native-media
       - name: Build native client
         if: ${{ needs.scope.outputs.run_full != 'false' }}
         run: cargo build --locked --release
+      - name: Verify system-only native media runtime
+        if: ${{ needs.scope.outputs.run_full != 'false' }}
+        shell: bash
+        run: |
+          binary=target/release/xcoc
+          if [[ "$RUNNER_OS" == Windows ]]; then binary="$binary.exe"; fi
+          python packaging/native/check-runtime.py "$binary"
       - name: Test macOS runtime and protected storage
         if: ${{ needs.scope.outputs.run_full != 'false' && (runner.os == 'macOS') }}
         run: cargo test --locked --workspace --all-targets --all-features
@@ -225,6 +249,8 @@ jobs:
           if ($install.ExitCode -notin @(0, 3010)) { throw "Xcoc MSI failed with $($install.ExitCode)." }
           & (Join-Path $installRoot 'xcoc.exe') --version
           if ($LASTEXITCODE) { throw 'Custom-path Xcoc executable verification failed.' }
+          & (Join-Path $installRoot 'xcoc.exe') media-worker --check
+          if ($LASTEXITCODE) { throw 'Installed native media worker verification failed.' }
           if ((Get-Content -LiteralPath (Join-Path $stateRoot 'config.json') -Raw) -ne $existingState) { throw 'Xcoc MSI changed existing configuration.' }
           if (-not (Test-Path (Join-Path $stateRoot "recordings\$cameraId\existing.mp4"))) { throw 'Xcoc MSI removed existing recording data.' }
           $service = Get-CimInstance Win32_Service -Filter "Name='XcocClient'"

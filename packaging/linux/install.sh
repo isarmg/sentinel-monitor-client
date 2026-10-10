@@ -14,6 +14,8 @@ install_client() (
     echo "Build or extract the release binary first: $source_binary" >&2
     exit 1
   fi
+  # Validate the embedded media engine before changing any installed files.
+  require "$source_binary" media-worker --check
   if [ ! -f "$source_unit" ]; then
     echo "Missing service unit: $source_unit" >&2
     exit 1
@@ -137,12 +139,6 @@ main() {
 
   PATH=/usr/local/bin:/usr/bin:/bin
   export PATH
-  for tool in ffmpeg ffprobe; do
-    if ! command -v "$tool" >/dev/null 2>&1; then
-      echo "$tool must be available in the systemd service PATH." >&2
-      exit 1
-    fi
-  done
 
   printf 'Start xcoc automatically at boot? [Y/n] '
   if ! IFS= read -r answer; then answer=; fi

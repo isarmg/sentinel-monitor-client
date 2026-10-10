@@ -6,7 +6,7 @@
 
 1. 在 [客户端 Releases](https://github.com/isarmg/xcoc/releases) 下载目标版本的本机平台资产和 `SHA256SUMS`。Linux/macOS 资产名不包含版本号，必须确认所在 Release 的版本。Windows 正式安装用 MSI，ZIP 仅用于手工运行。
 2. 请服务端管理员创建摄像头实例，提供 HTTPS 根地址、实例授权码。桌面一次安装可管理多个实例，每个实例对应一台摄像机；移动端只管理一份配对和一个主码流。
-3. 桌面安装 FFmpeg 和同套 FFprobe。后台服务的 PATH 中必须也能找到它们；仅在当前用户终端可用还不够。本机摄像头还需对应采集后端和 libx264，见[兼容说明](camera-support.md)。手机使用系统摄像头/编码器，无需安装 FFmpeg。
+3. 桌面使用内置媒体工作进程，以 `xcoc media-worker --check` 检查链接的 FFmpeg 库。网络摄像头不需要 `ffmpeg`/`ffprobe` 命令；内置/USB 摄像头另需带对应采集后端和 `libx264` 的 `ffmpeg`，且实际采集账户的 PATH 必须能找到它。见[媒体运行时](media-worker.md)与[兼容说明](camera-support.md)。手机使用系统摄像头/编码器，无需安装 FFmpeg。
 4. 服务端 HTTPS 与发布用 RTSPS 证书都必须可信且名称匹配；摄像头 RTSP 可在本地网络内使用。授权码在桌面交互提示中明文回显，摄像头密码隐藏输入。
 5. 下文注释解释命令用途。`INSTANCE_UUID`、`OLD_INSTANCE_UUID` 替换为实际实例 UUID；不要将授权码、摄像头密码或媒体 token 放在命令参数中。
 
@@ -23,16 +23,13 @@
 
 ### 1. 安装媒体工具和客户端
 
-以下安装媒体工具以 Debian/Ubuntu 为例；其他发行版用本机包管理器安装 `ffmpeg`，再核对工具路径。
+网络摄像头只需要客户端内置媒体运行时。内置/USB 摄像头另装外部采集命令，例如 Debian/Ubuntu
+使用 `sudo apt update && sudo apt install ffmpeg`，并核对 `ffmpeg -version`。这套本地采集工具不替代
+源码构建所需的链接库，二者的依赖边界见[媒体运行时](media-worker.md)。
 
 ```sh
-# 更新 APT 包索引，并安装提供 ffmpeg/ffprobe 的媒体工具套件。
-sudo apt update
-sudo apt install ffmpeg
-# 核对架构和工具版本；本机应为 x86_64。
+# 核对架构；本机应为 x86_64。
 uname -m
-ffmpeg -version
-ffprobe -version
 # 计算压缩包哈希，人工对比同版 SHA256SUMS 中该文件的行。
 sha256sum ./xcoc-linux-x86_64.tar.gz
 # 创建本次解压目录，保留发行包中的 target/release 与 packaging 相对布局。
@@ -41,19 +38,20 @@ tar -xzf ./xcoc-linux-x86_64.tar.gz -C xcoc-1.0.0-linux
 cd xcoc-1.0.0-linux
 # 安装程序到 /usr/local/bin 和 unit 到 /etc/systemd/system，登记并立即启动服务。
 sudo sh packaging/linux/install.sh
-# 确认 Client 版本及当前服务状态。
+# 确认 Client 版本、内置媒体运行时及当前服务状态。
 xcoc --version
+xcoc media-worker --check
 systemctl status xcoc.service
 ```
 
-安装脚本只询问是否开机自启，按 Enter 默认为 Yes；选择 No 仍立即启动本次服务。首次未配对时服务等待配置。脚本要求 FFmpeg/FFprobe 位于 `/usr/local/bin:/usr/bin:/bin`，并以系统服务身份运行，当前 unit 未指定独立 User，按 systemd 默认使用 root。
+安装脚本只询问是否开机自启，按 Enter 默认为 Yes；选择 No 仍立即启动本次服务。首次未配对时服务等待配置。脚本先对待安装二进制执行无凭据的媒体运行时检查。内置/USB 摄像头使用的 `ffmpeg` 须位于 `/usr/local/bin:/usr/bin:/bin`；网络摄像头不要求该命令。当前 unit 未指定独立 User，按 systemd 默认使用 root。
 
 ### 2. 首次配对、摄像头配置与验收
 
 ```sh
 # 停止服务，避免与配对/配置写入同时运行。
 sudo systemctl stop xcoc.service
-# 交互输入 Server、授权码和名称，然后发现/录入摄像头并用 ffprobe 实际验证。
+# 交互输入 Server、授权码和名称，然后发现/录入摄像头并用内置媒体库实际验证。
 sudo xcoc setup --interactive
 # 查看配对实例 UUID，以及不含摄像头凭据的配置摘要。
 sudo xcoc status
@@ -113,9 +111,9 @@ sudo systemctl disable --now xcoc.service
 # 核对安装后的本机配对与摄像头摘要。
 sudo xcoc status
 sudo xcoc camera list
-# 模拟 unit 的 PATH，核对后台确实能找到工具。
+# 核对内置媒体库；仅内置/USB 摄像头额外检查 unit PATH 中的采集命令。
+/usr/local/bin/xcoc media-worker --check
 env PATH=/usr/local/bin:/usr/bin:/bin ffmpeg -version
-env PATH=/usr/local/bin:/usr/bin:/bin ffprobe -version
 # 发现可达网段的 ONVIF 设备，最长等待 3 秒；为空不代表 RTSP 不可用。
 sudo xcoc camera discover --timeout-seconds 3
 # 查看最近 100 条服务日志；实时跟踪用 -f，Ctrl+C 只停止查看。
@@ -147,16 +145,14 @@ systemctl show xcoc.service --property=LoadState,ActiveState
 
 ### 1. 安装
 
-先安装本机可用、支持所需采集后端的 Windows x64 FFmpeg 发行套件：
+网络摄像头使用客户端内置媒体运行时，不需要额外安装 `ffmpeg.exe` 或 `ffprobe.exe`。
+只有内置/USB 摄像头需要本机可用、支持 DirectShow 与 `libx264` 的 Windows x64 FFmpeg 采集工具：
 
-1. 将 FFmpeg 套件解压到固定目录，找到同一 `bin` 目录中的 `ffmpeg.exe` 和 `ffprobe.exe`，不要放在会被临时清理的目录。
-2. 在系统“高级系统设置 → 环境变量 → 系统变量 → Path → 编辑”中新增该 `bin` 的完整路径，确认保存。不要只修改当前用户 PATH，LocalSystem 服务需要系统配置。
-3. 重新打开管理员 PowerShell，运行下方版本命令。若已运行服务后才修改系统环境，重启机器确保服务继承新环境，再继续设置。
+1. 将包含 `ffmpeg.exe` 的套件解压到固定目录，不要放在会被临时清理的目录。
+2. 在实际采集账户的 PATH 中添加该 `bin` 的完整路径；如由 LocalSystem 服务采集，须使用系统变量 Path，不能只修改当前用户 PATH。
+3. 重新打开对应账户的 PowerShell，用 `ffmpeg -version` 检查。若已运行服务后才修改系统环境，重启机器确保服务继承新环境。系统服务仍需单独验证摄像头权限。
 
 ```powershell
-# 检查媒体工具可从当前系统配置找到；服务也需要同套工具。
-ffmpeg -version
-ffprobe -version
 # 校验 MSI，与同版 SHA256SUMS 对比。
 Get-FileHash .\xcoc-1.0.0-windows-x64.msi -Algorithm SHA256
 # 安装程序和 XcocClient 服务，等待向导退出并写入安装日志。
@@ -174,6 +170,7 @@ $installRoot = (Get-ItemProperty 'HKLM:\Software\sarmg\xcoc').InstallLocation
 $client = Join-Path $installRoot 'xcoc.exe'
 # 确认版本、服务和登记路径；& 执行变量中的程序。
 & $client --version
+& $client media-worker --check
 Get-Service -Name XcocClient
 sc.exe qc XcocClient
 ```
@@ -267,13 +264,11 @@ Get-Service -Name XcocClient -ErrorAction SilentlyContinue
 
 下文通过 `sudo env PATH=...` 明确给管理命令提供与后台相同的媒体工具路径，避免 sudo 重置 PATH 后找不到 Homebrew 的 FFmpeg。
 
-当前 Release 只提供 arm64 二进制压缩包，没有 PKG、安装/卸载助手或已登记的 LaunchDaemon。先安装可信 FFmpeg 套件；已经使用 Homebrew 的机器可执行 `brew install ffmpeg`。手工安装步骤：
+当前 Release 只提供 arm64 二进制压缩包，没有 PKG、安装/卸载助手或已登记的 LaunchDaemon。网络摄像头使用内置媒体运行时；内置/USB 摄像头另装支持 AVFoundation 与 `libx264` 的可信 FFmpeg 采集工具，使用 Homebrew 的机器可执行 `brew install ffmpeg`。手工安装步骤：
 
 ```sh
-# 确认 arm64，以及 ffmpeg/ffprobe 可用。
+# 确认 arm64；仅内置/USB 摄像头另检查 ffmpeg -version。
 uname -m
-ffmpeg -version
-ffprobe -version
 # 对比同版 SHA256SUMS 中的归档哈希，再解压到独立目录。
 shasum -a 256 ./xcoc-macos-arm64.tar.gz
 mkdir xcoc-1.0.0-macos
@@ -283,6 +278,7 @@ sudo install -d -m 0755 /usr/local/bin
 sudo install -m 0755 xcoc-1.0.0-macos/target/release/xcoc /usr/local/bin/xcoc
 # 核对安装版本，完成 Server 配对和摄像头探测。
 /usr/local/bin/xcoc --version
+/usr/local/bin/xcoc media-worker --check
 sudo env PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin /usr/local/bin/xcoc setup --interactive
 # 查看配对和摄像头摘要；前台启动发布/录像，Ctrl+C 优雅停止。
 sudo env PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin /usr/local/bin/xcoc status
@@ -374,9 +370,9 @@ sudo launchctl print-disabled system
 ### 4. 诊断、升级与卸载
 
 ```sh
-# 使用与 plist 相同的 PATH 核对服务工具。
+# 核对内置媒体库；仅内置/USB 摄像头额外检查 plist PATH 中的采集命令。
+/usr/local/bin/xcoc media-worker --check
 env PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin ffmpeg -version
-env PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin ffprobe -version
 # 查看本机配对、摄像头摘要和 ONVIF 发现。
 sudo env PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin /usr/local/bin/xcoc status
 sudo env PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin /usr/local/bin/xcoc camera list

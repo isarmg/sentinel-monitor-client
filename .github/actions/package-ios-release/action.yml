@@ -1,0 +1,44 @@
+name: Package iOS Release
+description: Build and verify unsigned device archives and arm64 Simulator apps.
+runs:
+  using: composite
+  steps:
+    - name: Verify mobile release version identity
+      shell: bash
+      run: python3 packaging/mobile/release.py check
+    - name: Build and test Release simulator application
+      shell: bash
+      run: |
+        set -euo pipefail
+        simulator_id="$(xcrun simctl list devices available -j | python3 -c 'import json,sys; print(next(d["udid"] for group in json.load(sys.stdin)["devices"].values() for d in group if d.get("isAvailable") and d["name"].startswith("iPhone")))')"
+        xcodebuild -project clients/ios/XcocCamera.xcodeproj -scheme XcocCamera \
+          -configuration Release -sdk iphonesimulator -destination "id=$simulator_id" \
+          -derivedDataPath clients/ios/ReleaseBuild/simulator-tests \
+          CODE_SIGNING_ALLOWED=NO ENABLE_TESTABILITY=YES ARCHS=arm64 ONLY_ACTIVE_ARCH=YES test
+    - name: Build distributable simulator application without test instrumentation
+      shell: bash
+      run: |
+        xcodebuild -project clients/ios/XcocCamera.xcodeproj -scheme XcocCamera \
+          -configuration Release -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+          -derivedDataPath clients/ios/ReleaseBuild/simulator \
+          CODE_SIGNING_ALLOWED=NO ENABLE_TESTABILITY=NO ARCHS=arm64 ONLY_ACTIVE_ARCH=NO build
+    - name: Archive unsigned device application
+      shell: bash
+      run: |
+        xcodebuild -project clients/ios/XcocCamera.xcodeproj -scheme XcocCamera \
+          -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
+          -archivePath clients/ios/ReleaseBuild/XcocCamera.xcarchive \
+          -derivedDataPath clients/ios/ReleaseBuild/device \
+          CODE_SIGNING_ALLOWED=NO ARCHS=arm64 ONLY_ACTIVE_ARCH=NO archive
+    - name: Verify and package unsigned iOS outputs
+      shell: bash
+      run: python3 packaging/mobile/release.py ios
+    - name: Retain iOS Release inputs
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: xcoc-ios-arm64
+        path: |
+          dist/xcoc-ios-arm64-unsigned.xcarchive.zip
+          dist/xcoc-ios-simulator-arm64.app.zip
+          dist/xcoc-ios-release.json
+        if-no-files-found: error
