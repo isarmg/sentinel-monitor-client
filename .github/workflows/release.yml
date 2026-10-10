@@ -48,6 +48,8 @@ jobs:
           test -f "docs/releases/${version}.md"
       - name: Install exact Rust toolchain
         run: rustup toolchain install 1.99.0 --profile minimal
+      - name: Verify locked client support boundary
+        run: python scripts/check-xcsc-source.py
       - name: Build release binary
         run: cargo build --locked --release
       - name: Package Linux binary and systemd installer

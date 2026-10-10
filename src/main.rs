@@ -415,22 +415,22 @@ fn main() -> std::process::ExitCode {
             if runtime_event(
                 "xcoc.command.failed",
                 None,
-                xcss_log::Level::Error,
+                xcsc::log::Level::Error,
                 "Client command failed.",
                 failure.code,
             )
             .is_err()
             {
-                failure = xcsc_cli::fail(11, "diagnostics_unavailable");
+                failure = xcsc::cli::fail(11, "diagnostics_unavailable");
             }
-            let exit = xcsc_cli::emit("xcoc", "command", "human", &Err(failure), &XcocErrors);
+            let exit = xcsc::cli::emit("xcoc", "command", "human", &Err(failure), &XcocErrors);
             std::process::ExitCode::from(exit)
         }
     }
 }
 
 struct XcocErrors;
-impl xcsc_cli::ProductErrorCatalog for XcocErrors {
+impl xcsc::cli::ProductErrorCatalog for XcocErrors {
     fn message(&self, code: &'static str) -> Option<&'static str> {
         Some(match code {
             "pairing_state_incompatible" => {
@@ -478,7 +478,7 @@ impl xcsc_cli::ProductErrorCatalog for XcocErrors {
             _ => return None,
         })
     }
-    fn next_step(&self, _product: &str, error: &xcsc_cli::Failure) -> Option<String> {
+    fn next_step(&self, _product: &str, error: &xcsc::cli::Failure) -> Option<String> {
         Some(match error.code {
             "pairing_state_incompatible" => "Inspect the protected pairing archive, then use xcoc setup --interactive --replace with a new authorization code.",
             "important_state_incompatible" | "command_state_incompatible" => "Inspect the preserved recordings and durable device command state; repair the storage problem without deleting pending evidence.",
@@ -489,9 +489,9 @@ impl xcsc_cli::ProductErrorCatalog for XcocErrors {
     }
 }
 
-fn public_cli_failure(error: &anyhow::Error) -> xcsc_cli::Failure {
-    let mut failure = if let Some(source) = error.downcast_ref::<xcsc_cli::Failure>() {
-        xcsc_cli::fail(source.exit, source.code)
+fn public_cli_failure(error: &anyhow::Error) -> xcsc::cli::Failure {
+    let mut failure = if let Some(source) = error.downcast_ref::<xcsc::cli::Failure>() {
+        xcsc::cli::fail(source.exit, source.code)
     } else {
         let known = [
             "command_state_incompatible",
@@ -520,10 +520,10 @@ fn public_cli_failure(error: &anyhow::Error) -> xcsc_cli::Failure {
                 "DEVICE_OPERATION_FAILED" => "operation_failed",
                 code => code,
             });
-        xcsc_cli::fail(8, code)
+        xcsc::cli::fail(8, code)
     };
     failure.committed = error
-        .downcast_ref::<xcsc_cli::Failure>()
+        .downcast_ref::<xcsc::cli::Failure>()
         .is_some_and(|source| source.committed)
         || error.chain().any(|cause| {
             let context = cause.to_string();
@@ -586,15 +586,15 @@ fn run_main() -> anyhow::Result<()> {
         if *follow {
             raw.push("--follow".into());
         }
-        let args = xcsc_cli::Args::parse(raw, &[], &[])?;
+        let args = xcsc::cli::Args::parse(raw, &[], &[])?;
         let parent = cli.config.parent().context("config parent missing")?;
         let exit = if *follow {
             ensure!(format == "ndjson", "follow_requires_logs_ndjson");
-            xcsc_cli::follow_log_source("xcoc", args, &XcocErrors, |args| {
+            xcsc::cli::follow_log_source("xcoc", args, &XcocErrors, |args| {
                 windows_runtime_logs(args, parent)
             })
         } else {
-            xcsc_cli::emit(
+            xcsc::cli::emit(
                 "xcoc",
                 "logs",
                 format,
@@ -692,13 +692,13 @@ async fn setup(
     let input_deadline = Instant::now() + Duration::from_secs(timeout_seconds);
     let input: Zeroizing<SetupInput> = Zeroizing::new(if interactive {
         SetupInput {
-            server: xcsc_cli::prompt_text("Server HTTPS origin", MAX_URL_BYTES, input_deadline)?,
-            authorization_code: xcsc_cli::prompt_text(
+            server: xcsc::cli::prompt_text("Server HTTPS origin", MAX_URL_BYTES, input_deadline)?,
+            authorization_code: xcsc::cli::prompt_text(
                 "Authorization code (visible)",
                 MAX_AUTHORIZATION_CODE_BYTES,
                 input_deadline,
             )?,
-            name: xcsc_cli::prompt_text("Client name", MAX_NAME_BYTES, input_deadline)?,
+            name: xcsc::cli::prompt_text("Client name", MAX_NAME_BYTES, input_deadline)?,
         }
     } else {
         read_stdin_json()?
@@ -708,7 +708,7 @@ async fn setup(
     validate_authorization_code(&input.authorization_code)?;
     #[cfg(windows)]
     let boot_start = if path == default_config_path() && interactive {
-        let choice = xcsc_cli::prompt_text("Start at boot? [Y/n]", 8, input_deadline)?;
+        let choice = xcsc::cli::prompt_text("Start at boot? [Y/n]", 8, input_deadline)?;
         parse_boot_start_choice(&choice)?
     } else {
         true
@@ -836,7 +836,7 @@ async fn interactive_camera_setup(deadline: Instant) -> anyhow::Result<Camera> {
             camera.remote_addr
         );
     }
-    let selection = xcsc_cli::prompt_text(
+    let selection = xcsc::cli::prompt_text(
         if discovered.is_empty() {
             "No ONVIF camera found; enter a manual RTSP main-stream URL"
         } else {
@@ -845,10 +845,10 @@ async fn interactive_camera_setup(deadline: Instant) -> anyhow::Result<Camera> {
         MAX_URL_BYTES,
         deadline,
     )?;
-    let name = xcsc_cli::prompt_text("Camera name", MAX_NAME_BYTES, deadline)?;
+    let name = xcsc::cli::prompt_text("Camera name", MAX_NAME_BYTES, deadline)?;
     let location =
-        xcsc_cli::prompt_text("Camera location (optional)", MAX_LOCATION_BYTES, deadline)?;
-    let storage_mode = match xcsc_cli::prompt_text(
+        xcsc::cli::prompt_text("Camera location (optional)", MAX_LOCATION_BYTES, deadline)?;
+    let storage_mode = match xcsc::cli::prompt_text(
         "Recording location [server/client] (default server)",
         MAX_STORAGE_MODE_BYTES,
         deadline,
@@ -860,9 +860,9 @@ async fn interactive_camera_setup(deadline: Instant) -> anyhow::Result<Camera> {
         _ => anyhow::bail!("recording location must be server or client"),
     };
     let username =
-        xcsc_cli::prompt_text("Camera username (optional)", MAX_USERNAME_BYTES, deadline)?;
+        xcsc::cli::prompt_text("Camera username (optional)", MAX_USERNAME_BYTES, deadline)?;
     let password =
-        xcsc_cli::prompt_secret("Camera password (optional)", MAX_PASSWORD_BYTES, deadline)?
+        xcsc::cli::prompt_secret("Camera password (optional)", MAX_PASSWORD_BYTES, deadline)?
             .to_string();
     let adapter = if let Ok(index) = selection.parse::<usize>() {
         let selected = discovered
@@ -884,7 +884,8 @@ async fn interactive_camera_setup(deadline: Instant) -> anyhow::Result<Camera> {
             sub_profile_token: None,
         }
     } else {
-        let sub = xcsc_cli::prompt_text("RTSP sub-stream URL (optional)", MAX_URL_BYTES, deadline)?;
+        let sub =
+            xcsc::cli::prompt_text("RTSP sub-stream URL (optional)", MAX_URL_BYTES, deadline)?;
         let mut streams = vec![device::ConfiguredStream {
             profile: device::StreamProfile::Main,
             url: selection,
@@ -1063,7 +1064,7 @@ async fn run(
         runtime_event(
             "xcoc.runtime.already_running",
             None,
-            xcss_log::Level::Info,
+            xcsc::log::Level::Info,
             "Another runtime already owns this configuration.",
             "INSTANCE_BUSY",
         )?;
@@ -1098,7 +1099,7 @@ async fn run(
                     runtime_event(
                         "xcoc.config.unavailable",
                         None,
-                        xcss_log::Level::Warn,
+                        xcsc::log::Level::Warn,
                         "Waiting for a valid protected configuration.",
                         "CONFIGURATION_UNAVAILABLE",
                     )?;
@@ -1241,7 +1242,7 @@ async fn run(
                         runtime_event(
                             "xcoc.snapshot.task_failed",
                             None,
-                            xcss_log::Level::Error,
+                            xcsc::log::Level::Error,
                             "A snapshot worker failed.",
                             "TASK_FAILED",
                         )?;
@@ -1276,7 +1277,7 @@ async fn run(
                         runtime_event(
                             "xcoc.snapshot.request_failed",
                             Some(instance_id),
-                            xcss_log::Level::Warn,
+                            xcsc::log::Level::Warn,
                             "The Server snapshot request failed.",
                             device_error_code(&error),
                         )?;
@@ -1352,7 +1353,7 @@ async fn run(
                         runtime_event(
                             "xcoc.command.task_failed",
                             None,
-                            xcss_log::Level::Error,
+                            xcsc::log::Level::Error,
                             "A device command worker failed.",
                             "TASK_FAILED",
                         )?;
@@ -1581,7 +1582,7 @@ async fn wait_for_shutdown(shutdown: &mut Option<watch::Receiver<bool>>) {
     }
 }
 
-fn acquire_run_lock(path: &Path) -> anyhow::Result<Option<xcsc_runtime::SingleInstanceLock>> {
+fn acquire_run_lock(path: &Path) -> anyhow::Result<Option<xcsc::runtime::SingleInstanceLock>> {
     let default_lock_parent = recording_root();
     let parent = if path == default_config_path() {
         default_lock_parent
@@ -1591,13 +1592,13 @@ fn acquire_run_lock(path: &Path) -> anyhow::Result<Option<xcsc_runtime::SingleIn
         path.parent().context("config path has no parent")?
     };
     fs::create_dir_all(parent).context("create Xcoc configuration directory")?;
-    let private = xcsc_fs_safety::PrivateDirectory::create(
+    let private = xcsc::fs_safety::PrivateDirectory::create(
         std::path::absolute(parent)?.join(".xcoc-runtime"),
     )
     .context("open protected Xcoc runtime state")?;
-    match xcsc_runtime::SingleInstanceLock::acquire(&private) {
+    match xcsc::runtime::SingleInstanceLock::acquire(&private) {
         Ok(lock) => Ok(Some(lock)),
-        Err(xcsc_runtime::Error::AlreadyRunning) => Ok(None),
+        Err(xcsc::runtime::Error::AlreadyRunning) => Ok(None),
         Err(error) => Err(error).context("lock Xcoc runtime"),
     }
 }
@@ -2113,7 +2114,7 @@ fn collect_resolved_cameras(
                         runtime_event(
                             "xcoc.device.connection_failed",
                             Some(id),
-                            xcss_log::Level::Warn,
+                            xcsc::log::Level::Warn,
                             "Camera resolution or stream probing failed.",
                             device_error_code(&error),
                         )?;
@@ -2125,7 +2126,7 @@ fn collect_resolved_cameras(
                 runtime_event(
                     "xcoc.device.task_failed",
                     None,
-                    xcss_log::Level::Error,
+                    xcsc::log::Level::Error,
                     "A camera resolution worker failed.",
                     "TASK_FAILED",
                 )?;
@@ -2141,15 +2142,15 @@ fn collect_resolved_cameras(
 fn runtime_event(
     event: &str,
     instance: Option<Uuid>,
-    level: xcss_log::Level,
+    level: xcsc::log::Level,
     message: &str,
     code: &str,
 ) -> anyhow::Result<()> {
     let record = if let Some(id) = instance {
-        xcss_log::LogRecord::instance("xcoc", "runtime", event, message, level, &id.to_string())?
+        xcsc::log::LogRecord::instance("xcoc", "runtime", event, message, level, &id.to_string())?
             .with_instance_type("camera")?
     } else {
-        xcss_log::LogRecord::server("xcoc", "runtime", event, message, level)?
+        xcsc::log::LogRecord::client("xcoc", "runtime", event, message, level)?
     };
     record.with_error_code(&code.to_ascii_lowercase())?.emit()?;
     Ok(())
@@ -2160,8 +2161,9 @@ fn device_error_code(error: &anyhow::Error) -> &'static str {
         "DEVICE_BACKPRESSURE"
     } else if error.downcast_ref::<onvif::DiscoveryLimit>().is_some() {
         "DISCOVERY_LIMIT_EXCEEDED"
-    } else if let Some(error) = error.downcast_ref::<xcsc_runtime::process::ProcessCaptureError>() {
-        use xcsc_runtime::process::ProcessCaptureError;
+    } else if let Some(error) = error.downcast_ref::<xcsc::runtime::process::ProcessCaptureError>()
+    {
+        use xcsc::runtime::process::ProcessCaptureError;
         match error {
             ProcessCaptureError::Timeout => "DEVICE_TIMEOUT",
             ProcessCaptureError::OutputLimit(_) => "DEVICE_RESPONSE_TOO_LARGE",
@@ -2285,12 +2287,12 @@ fn command_event(
     event: &str,
     result: Option<&CommandResult>,
 ) -> anyhow::Result<()> {
-    let record = xcss_log::LogRecord::instance(
+    let record = xcsc::log::LogRecord::instance(
         "xcoc",
         "device-command",
         event,
         "Device command execution state changed.",
-        xcss_log::Level::Info,
+        xcsc::log::Level::Info,
         &camera_id.to_string(),
     )?
     .with_task_id(&id.to_string())?
@@ -2513,7 +2515,7 @@ fn load_state(path: &Path) -> anyhow::Result<LocalState> {
 fn read_configuration_bytes(path: &Path) -> anyhow::Result<Vec<u8>> {
     #[cfg(unix)]
     {
-        use xcsc_fs_safety::{ConfigurationDirectory, EntryName};
+        use xcsc::fs_safety::{ConfigurationDirectory, EntryName};
         let directory =
             ConfigurationDirectory::open(path.parent().context("config path has no parent")?)?;
         let name = EntryName::new(path.file_name().context("config file name is missing")?)?;
@@ -2521,7 +2523,7 @@ fn read_configuration_bytes(path: &Path) -> anyhow::Result<Vec<u8>> {
     }
     #[cfg(windows)]
     {
-        use xcsc_fs_safety::{EntryName, PrivateDirectory};
+        use xcsc::fs_safety::{EntryName, PrivateDirectory};
         let directory = PrivateDirectory::open_existing(std::path::absolute(
             path.parent().context("config parent missing")?,
         )?)?;
@@ -2715,7 +2717,7 @@ fn save_configuration_bytes(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     fs::create_dir_all(parent)?;
     #[cfg(unix)]
     {
-        use xcsc_fs_safety::{ConfigurationDirectory, EntryName};
+        use xcsc::fs_safety::{ConfigurationDirectory, EntryName};
         let directory = ConfigurationDirectory::open(parent)?;
         let name = EntryName::new(path.file_name().context("config file name is missing")?)?;
         directory
@@ -2724,7 +2726,7 @@ fn save_configuration_bytes(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     }
     #[cfg(windows)]
     {
-        use xcsc_fs_safety::{AtomicFile, EntryName, PrivateDirectory};
+        use xcsc::fs_safety::{AtomicFile, EntryName, PrivateDirectory};
         if path.parent() == default_config_path().parent() {
             windows_config_acl::secure_config_directory(parent)?;
         }
@@ -2746,7 +2748,7 @@ fn preflight_state_write(path: &Path) -> anyhow::Result<()> {
     let parent = path.parent().context("config path has no parent")?;
     fs::create_dir_all(parent).context("create Xcoc configuration directory")?;
     #[cfg(unix)]
-    xcsc_fs_safety::ConfigurationDirectory::open(parent)
+    xcsc::fs_safety::ConfigurationDirectory::open(parent)
         .context("open protected configuration directory before pairing")?;
     #[cfg(windows)]
     if path == default_config_path() {
@@ -2814,20 +2816,22 @@ mod tests;
 
 #[cfg(windows)]
 fn windows_runtime_logs(
-    args: &xcsc_cli::Args,
+    args: &xcsc::cli::Args,
     path: &std::path::Path,
-) -> xcsc_cli::Result<serde_json::Value> {
-    use xcsc_cli::{fail, storage_error};
-    use xcsc_fs_safety::{EntryName, Error, PrivateDirectory};
+) -> xcsc::cli::Result<serde_json::Value> {
+    use xcsc::cli::{fail, storage_error};
+    use xcsc::fs_safety::{EntryName, Error, PrivateDirectory};
     let directory = PrivateDirectory::open_existing(path.join("logs")).map_err(storage_error)?;
     let level = args
         .get("--level")
         .map(|value| {
-            serde_json::from_value::<xcss_log::Level>(serde_json::json!(value.to_ascii_uppercase()))
+            serde_json::from_value::<xcsc::log::Level>(serde_json::json!(
+                value.to_ascii_uppercase()
+            ))
         })
         .transpose()
         .map_err(|_| fail(2, "invalid_log_level"))?;
-    xcsc_cli::query_rotating_logs(
+    xcsc::cli::query_rotating_logs(
         args,
         "xcoc",
         |name| match directory.read_private_bounded(
@@ -2839,9 +2843,9 @@ fn windows_runtime_logs(
             Err(_) => Err(fail(8, "unsafe_or_unreadable_runtime_log")),
         },
         |bytes| {
-            xcss_log::query(
+            xcsc::log::query(
                 std::io::Cursor::new(bytes),
-                xcss_log::LogFilter {
+                xcsc::log::LogFilter {
                     since: args.get("--since"),
                     instance_id: args.get("--instance-id"),
                     event: args.get("--event"),
@@ -2850,7 +2854,7 @@ fn windows_runtime_logs(
                     minimum_level: level,
                     ..Default::default()
                 },
-                xcss_log::QueryLimits {
+                xcsc::log::QueryLimits {
                     max_input_bytes: 1024 * 1024,
                     max_records: 16384,
                 },
@@ -2870,7 +2874,7 @@ mod protected_windows_state_tests {
     fn windows_configuration_and_ledger_use_verified_private_atomic_storage() {
         let temp = tempfile::tempdir().unwrap();
         let directory =
-            xcsc_fs_safety::PrivateDirectory::create(temp.path().join("state")).unwrap();
+            xcsc::fs_safety::PrivateDirectory::create(temp.path().join("state")).unwrap();
         let config = directory.path().join("config.json");
         save_configuration_bytes(&config, b"private-fixture").unwrap();
         assert_eq!(

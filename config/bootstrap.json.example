@@ -1,5 +1,5 @@
 {
-  "server": "https://xcoc.example.com",
+  "server": "https://xcos.example.com",
   "authorization_code": "<instance authorization code>",
   "name": "camera-edge-01"
 }

@@ -252,9 +252,9 @@ impl ResolvedDevice {
                 "-of",
                 "json",
             ]);
-            let output = xcsc_runtime::process::capture_bounded(
+            let output = xcsc::runtime::process::capture_bounded(
                 &mut command,
-                xcsc_runtime::process::ProcessLimits {
+                xcsc::runtime::process::ProcessLimits {
                     timeout: Duration::from_secs(12),
                     stdout_bytes: 256 * 1024,
                     stderr_bytes: 64 * 1024,

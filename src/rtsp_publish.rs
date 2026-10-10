@@ -457,9 +457,9 @@ mod tests {
             "json",
             &read_url,
         ]);
-        let reader = xcsc_runtime::process::capture_bounded(
+        let reader = xcsc::runtime::process::capture_bounded(
             &mut command,
-            xcsc_runtime::process::ProcessLimits {
+            xcsc::runtime::process::ProcessLimits {
                 timeout: Duration::from_secs(15),
                 stdout_bytes: 65536,
                 stderr_bytes: 65536,

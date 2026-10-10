@@ -11,7 +11,7 @@ members = [".", "crates/mobile-ffi"]
 resolver = "3"
 
 [dependencies]
-xcsc-runtime = { git = "https://github.com/isarmg/xcsc.git", rev = "a3c827b7f0f69d84ff69f72be1533a7171ab63d6", version = "=1.0.0" }
+xcsc = { git = "https://github.com/isarmg/xcsc.git", rev = "00770c007912b276f5bb1075abfefe3c31026276", version = "=1.0.0" }
 anyhow = "1"
 async-trait = "0.1"
 base64 = "0.23"
@@ -19,7 +19,6 @@ chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
 rand = "0.10"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
-xcsc-secure-xml = { git = "https://github.com/isarmg/xcsc.git", rev = "a3c827b7f0f69d84ff69f72be1533a7171ab63d6", version = "=1.0.0" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha1 = "0.11"
@@ -30,11 +29,9 @@ webpki-roots = "1.0.9"
 url = "2"
 uuid = { version = "1", features = ["serde", "v4"] }
 zeroize = { version = "1.9.1", features = ["derive"] }
-xcss-log = { git = "https://github.com/isarmg/xcss.git", rev = "d58b9ef0822984ee0d29fb8b8139cfd2787374fb", version = "=1.0.0" }
-xcsc-fs-safety = { git = "https://github.com/isarmg/xcsc.git", rev = "a3c827b7f0f69d84ff69f72be1533a7171ab63d6", version = "=1.0.0" }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
-xcsc-cli = { git = "https://github.com/isarmg/xcsc.git", rev = "a3c827b7f0f69d84ff69f72be1533a7171ab63d6", version = "=1.0.0" }
+xcsc = { git = "https://github.com/isarmg/xcsc.git", rev = "00770c007912b276f5bb1075abfefe3c31026276", version = "=1.0.0" }
 
 [target.'cfg(windows)'.dependencies]
 windows-service = "=0.8.1"

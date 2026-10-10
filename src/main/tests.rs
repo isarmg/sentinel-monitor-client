@@ -22,7 +22,7 @@ fn write_private_config(path: &Path, bytes: impl AsRef<[u8]>) {
 #[test]
 fn unconfigured_pairing_reports_an_empty_camera_list() {
     let instance = CameraInstance {
-        server: "https://xcoc.example/".to_owned(),
+        server: "https://xcos.example.com/".to_owned(),
         instance_id: Uuid::new_v4(),
         access_token: "a".repeat(43),
         name: "empty".to_owned(),
@@ -57,7 +57,7 @@ fn command_receipts_are_batched_and_only_sent_ids_are_removed() {
 
 #[test]
 fn command_failure_uses_safe_product_messages_and_preserves_committed_pairing_evidence() {
-    use xcsc_cli::ProductErrorCatalog;
+    use xcsc::cli::ProductErrorCatalog;
     let error =
         anyhow::anyhow!("rtsp://operator:private-camera-password@192.0.2.3; raw device body")
             .context("pairing was committed, but camera configuration is not ready");
@@ -111,7 +111,7 @@ fn unconfigured_pairing_token_change_invalidates_inflight_snapshot_generation() 
     let id = Uuid::new_v4();
     let installation_id = Uuid::new_v4();
     let instance = |token: &str| CameraInstance {
-        server: "https://xcoc.example/".to_owned(),
+        server: "https://xcos.example.com/".to_owned(),
         instance_id: id,
         access_token: token.to_owned(),
         name: "unconfigured".to_owned(),
@@ -278,7 +278,7 @@ fn state_with(cameras: Vec<Camera>) -> LocalState {
         instances: cameras
             .into_iter()
             .map(|camera| CameraInstance {
-                server: "https://xcoc.example/".to_owned(),
+                server: "https://xcos.example.com/".to_owned(),
                 instance_id: camera.id,
                 access_token: "a".repeat(43),
                 name: camera.name.clone(),
@@ -329,9 +329,9 @@ fn camera_views_never_serialize_secrets() {
 
 #[test]
 fn release_server_policy_requires_https() {
-    assert!(validate_server_origin("https://xcoc.example").is_ok());
+    assert!(validate_server_origin("https://xcos.example.com").is_ok());
     assert!(validate_server_origin("http://192.0.2.1").is_err());
-    assert!(validate_server_origin("https://user@xcoc.example").is_err());
+    assert!(validate_server_origin("https://user@xcos.example.com").is_err());
 }
 
 #[test]
@@ -354,13 +354,13 @@ fn authorization_code_matches_the_current_server_contract() {
 #[test]
 fn server_origin_rejects_non_root_paths_and_request_metadata() {
     for suffix in ["/admin", "/api/v1", "/camera/", "/?token=x", "/#camera"] {
-        assert!(validate_server_origin(&format!("https://xcoc.example{suffix}")).is_err());
+        assert!(validate_server_origin(&format!("https://xcos.example.com{suffix}")).is_err());
     }
     assert_eq!(
-        validate_server_origin(" https://xcoc.example:8443/ ")
+        validate_server_origin(" https://xcos.example.com:8443/ ")
             .unwrap()
             .as_str(),
-        "https://xcoc.example:8443/"
+        "https://xcos.example.com:8443/"
     );
 }
 
@@ -390,7 +390,7 @@ fn oversized_state_does_not_create_temporary_credentials() {
     let path = temporary.path().join("config.json");
     let mut state = state_with(Vec::new());
     state.instances.push(CameraInstance {
-        server: "https://xcoc.example".into(),
+        server: "https://xcos.example.com".into(),
         instance_id: Uuid::new_v4(),
         access_token: "x".repeat(MAX_INPUT_BYTES as usize),
         name: "camera".into(),
@@ -912,12 +912,13 @@ async fn queued_command_expired_before_execution_skips_the_device() {
 
 #[test]
 fn publish_grants_require_encrypted_scoped_urls() {
-    assert!(validate_publish_url("rtsps://xcoc.example:8322/camera?jwt=token").is_ok());
-    assert!(validate_publish_url("rtsp://xcoc.example:8554/camera?jwt=token").is_err());
+    assert!(validate_publish_url("rtsps://xcos.example.com:8322/camera?jwt=token").is_ok());
+    assert!(validate_publish_url("rtsp://xcos.example.com:8554/camera?jwt=token").is_err());
     assert!(
-        validate_publish_url("rtsps://user:password@xcoc.example:8322/camera?jwt=token").is_err()
+        validate_publish_url("rtsps://user:password@xcos.example.com:8322/camera?jwt=token")
+            .is_err()
     );
-    assert!(validate_publish_url("rtsps://xcoc.example:8322/camera").is_err());
+    assert!(validate_publish_url("rtsps://xcos.example.com:8322/camera").is_err());
 }
 
 #[test]

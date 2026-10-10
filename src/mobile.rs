@@ -400,7 +400,7 @@ mod tests {
     #[test]
     fn mobile_snapshot_matches_edge_v1_and_never_contains_credentials() {
         let pairing = Pairing {
-            server: "https://xcoc.example.com".into(),
+            server: "https://xcos.example.com".into(),
             installation_id: Uuid::new_v4(),
             instance_id: Uuid::new_v4(),
             access_token: "a".repeat(43),

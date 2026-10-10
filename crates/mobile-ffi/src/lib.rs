@@ -1,4 +1,4 @@
-//! Foundation revision 1 owns all buffers, handles and panic boundaries.
+//! xcsc revision 1 owns all buffers, handles and panic boundaries.
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::Deserialize;
 use std::sync::{Arc, OnceLock};
@@ -8,7 +8,7 @@ use xcoc::{
     mobile::{self, CaptureMetadata, MobileClient, Pairing},
     rtsp_publish::MAX_FRAME_BYTES,
 };
-use xcsc_mobile_ffi::{self as ffi, FfiError, Handle, HandleRegistry, Payload, XcscFfiResultV1};
+use xcsc::mobile_ffi::{self as ffi, FfiError, Handle, HandleRegistry, Payload, XcscFfiResultV1};
 
 struct Session {
     runtime: Runtime,
@@ -153,7 +153,7 @@ pub unsafe extern "C" fn xcoc_frame_v1(
     timestamp_us: u64,
     output: *mut XcscFfiResultV1,
 ) -> i32 {
-    // SAFETY: Foundation validates all supplied lengths and output ownership.
+    // SAFETY: xcsc validates all supplied lengths and output ownership.
     unsafe {
         ffi::guard(output, || {
             frame_impl(

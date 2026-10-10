@@ -17,7 +17,7 @@
 | macOS Apple Silicon | tar.gz，手工部署 | 无随包安装器；默认配置 `/Library/Application Support/XcocClient/config.json` | `/Library/Application Support/XcocClient/recordings` |
 | Android / iOS | 原生应用，按移动指南构建/签名安装 | 应用私有存储及系统安全存储 | 当前移动端在 Server 录像 |
 
-`status` 和 `camera list` 是本机只读视图；服务运行和本机已配对不能代替 Server 的画面/录像验收。Xcoc 没有 Host/Sunshine 的 `pair recover`、`doctor` 或通用 `service start/stop` 子命令，不应复制其他产品的命令。
+`status` 和 `camera list` 是本机只读视图；服务运行和本机已配对不能代替 Server 的画面/录像验收。xcoc 没有 xsoc/xscc 的 `pair recover`、`doctor` 或通用 `service start/stop` 子命令，不应复制其他产品的命令。
 
 ## Linux x86_64（systemd）
 

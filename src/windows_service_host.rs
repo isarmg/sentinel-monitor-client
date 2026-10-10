@@ -25,7 +25,7 @@ fn service_main(_: Vec<OsString>) {
         if super::runtime_event(
             "xcoc.windows.service_failed",
             None,
-            xcss_log::Level::Error,
+            xcsc::log::Level::Error,
             "Windows service failed.",
             "WINDOWS_SERVICE_FAILED",
         )
@@ -76,7 +76,7 @@ fn serve() -> windows_service::Result<()> {
         if super::runtime_event(
             "xcoc.windows.runtime_failed",
             None,
-            xcss_log::Level::Error,
+            xcsc::log::Level::Error,
             "Windows service runtime failed.",
             super::device_error_code(error),
         )
@@ -98,24 +98,24 @@ fn serve() -> windows_service::Result<()> {
     Ok(())
 }
 
-fn initialize_logging() -> anyhow::Result<xcsc_fs_safety::PrivateDirectory> {
+fn initialize_logging() -> anyhow::Result<xcsc::fs_safety::PrivateDirectory> {
     let path = super::default_config_path();
     super::secure_existing_default_config(&path)?;
-    let directory = xcsc_fs_safety::PrivateDirectory::create(std::path::absolute(
+    let directory = xcsc::fs_safety::PrivateDirectory::create(std::path::absolute(
         path.parent().context("configuration parent missing")?,
     )?)?;
-    let sink = xcss_log::RotatingLogFile::create_private(
+    let sink = xcsc::log::RotatingLogFile::create_private(
         directory.path().join("logs"),
         "xcoc",
-        xcss_log::LogRetention::default(),
+        xcsc::log::LogRetention::default(),
     )?;
-    xcss_log::install_rotating_file(sink)?;
-    xcss_log::LogRecord::server(
+    xcsc::log::install_rotating_file(sink)?;
+    xcsc::log::LogRecord::client(
         "xcoc",
         "windows-service",
         "xcoc.windows.started",
         "Windows service runtime started.",
-        xcss_log::Level::Info,
+        xcsc::log::Level::Info,
     )?
     .emit()?;
     Ok(directory)
@@ -133,7 +133,7 @@ async fn supervise_runtime(
             super::runtime_event(
                 "xcoc.windows.runtime_restart",
                 None,
-                xcss_log::Level::Error,
+                xcsc::log::Level::Error,
                 "Windows service runtime requires recovery.",
                 super::device_error_code(&error),
             )?;

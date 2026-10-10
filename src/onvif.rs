@@ -14,7 +14,7 @@ use std::{collections::HashSet, net::SocketAddr, time::Duration};
 use tokio::{net::UdpSocket, time};
 use url::Url;
 use uuid::Uuid;
-use xcsc_secure_xml::Document;
+use xcsc::secure_xml::Document;
 
 const MAX_XML_BYTES: usize = 1024 * 1024;
 const MAX_DISCOVERY_RESULTS: usize = 256;
@@ -316,12 +316,12 @@ pub async fn discover(timeout: Duration) -> anyhow::Result<Vec<DiscoveredDevice>
         if let Some(device) = parse_probe_response(&buffer[..length], remote, message_id)
             && let Err(error) = admit_discovered_device(device, &mut devices, &mut seen)
         {
-            xcss_log::LogRecord::server(
+            xcsc::log::LogRecord::client(
                 "xcoc",
                 "runtime",
                 "xcoc.discovery.limit_reached",
                 "Device discovery stopped at its result limit.",
-                xcss_log::Level::Warn,
+                xcsc::log::Level::Warn,
             )?
             .with_error_code("discovery_limit_exceeded")?
             .emit()?;
@@ -641,9 +641,9 @@ fn text(document: &Document<'_>, name: &str) -> Option<String> {
 }
 
 fn parse_xml(xml: &str) -> anyhow::Result<Document<'_>> {
-    xcsc_secure_xml::parse_bounded(
+    xcsc::secure_xml::parse_bounded(
         xml,
-        xcsc_secure_xml::XmlBudget {
+        xcsc::secure_xml::XmlBudget {
             max_bytes: MAX_XML_BYTES,
             max_depth: 32,
             max_nodes: 4096,

@@ -62,7 +62,7 @@ cargo +1.99.0 clippy --locked --workspace --all-targets --all-features -- -D war
 cargo +1.99.0 test --locked --workspace --all-targets --all-features
 ```
 
-共享移动端 ABI 使用 Foundation revision 1：长度限定的输入、代际句柄、拥有所有权的结果和 panic
+共享移动端 ABI 使用 xcsc revision 1：长度限定的输入、代际句柄、拥有所有权的结果和 panic
 边界。C 调用方初始化结果后，读取并用 `xcsc_ffi_result_free_v1` 释放一次；编码帧在返回前复制，
 不会保留平台缓冲指针。媒体队列固定 4 帧，每帧最多 4 MiB；超量会请求下一个 IDR 恢复，捕获线程
 不等待网络写入。控制请求与媒体写入有超时，Server 响应、RTSP 头和 NAL 数量均受上限约束。

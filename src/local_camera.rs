@@ -226,9 +226,9 @@ pub async fn list_devices() -> anyhow::Result<serde_json::Value> {
         command.args(["dshow", "-i", "dummy"]);
         #[cfg(target_os = "macos")]
         command.args(["avfoundation", "-i", ""]);
-        let output = xcsc_runtime::process::capture_bounded(
+        let output = xcsc::runtime::process::capture_bounded(
             &mut command,
-            xcsc_runtime::process::ProcessLimits {
+            xcsc::runtime::process::ProcessLimits {
                 timeout: std::time::Duration::from_secs(12),
                 stdout_bytes: 65536,
                 stderr_bytes: 65536,
@@ -347,9 +347,9 @@ mod tests {
             .args(source.input_args())
             .args(["-t", "3", "-map", "0:v:0", "-c", "copy"])
             .arg(&output);
-        let recording = xcsc_runtime::process::capture_bounded(
+        let recording = xcsc::runtime::process::capture_bounded(
             &mut recorder,
-            xcsc_runtime::process::ProcessLimits {
+            xcsc::runtime::process::ProcessLimits {
                 timeout: std::time::Duration::from_secs(20),
                 stdout_bytes: 65536,
                 stderr_bytes: 65536,

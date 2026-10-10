@@ -26,6 +26,8 @@ jobs:
           persist-credentials: false
       - name: Install exact Rust toolchain
         run: rustup toolchain install 1.99.0 --profile minimal --component rustfmt,clippy
+      - name: Verify locked client support boundary
+        run: python scripts/check-xcsc-source.py
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Lint all targets
@@ -61,6 +63,8 @@ jobs:
         with:
           persist-credentials: false
       - run: rustup toolchain install 1.99.0 --profile minimal --target aarch64-linux-android
+      - name: Verify locked client support boundary
+        run: python scripts/check-xcsc-source.py
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
@@ -90,6 +94,8 @@ jobs:
         with:
           persist-credentials: false
       - run: rustup toolchain install 1.99.0 --profile minimal --target aarch64-apple-ios,aarch64-apple-ios-sim
+      - name: Verify locked client support boundary
+        run: python scripts/check-xcsc-source.py
       - run: bash scripts/build-ios-rust.sh
       - run: brew install xcodegen
       - run: cd clients/ios && xcodegen generate
@@ -121,6 +127,8 @@ jobs:
           persist-credentials: false
       - name: Install exact Rust toolchain
         run: rustup toolchain install 1.99.0 --profile minimal
+      - name: Verify locked client support boundary
+        run: python scripts/check-xcsc-source.py
       - name: Build native client
         run: cargo build --locked --release
       - name: Test macOS runtime and protected storage

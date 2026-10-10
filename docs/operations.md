@@ -28,7 +28,7 @@ sudo xcoc setup --interactive
 
 ```json
 {
-  "server": "https://xcoc.example.com",
+  "server": "https://xcos.example.com",
   "authorization_code": "36 位小写英文字母数字授权码",
   "name": "camera-edge-01"
 }

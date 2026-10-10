@@ -30,9 +30,9 @@ compileSdk 为 36。当前环境没有 Android NDK 和 Apple Xcode/iOS SDK，And
 - macOS 的默认临时目录经 `/var` 符号链接访问，导致配置与命令日志测试触发生产安全校验。
   测试夹具现在在临时根目录的真实路径中创建；生产存储继续拒绝符号链接祖先。
 - 配对前只检查目录可写，未检查安全路径。带符号链接的目录会在远端配对完成后才保存失败。
-  Unix 现在在发出配对请求前通过 Foundation `ConfigurationDirectory` 验证目录；新增回归覆盖此路径。
-- 共享媒体库无条件引入桌面 `xcsc-cli`，其服务管理代码无法为 iOS/Android 编译。
-  该依赖现在仅在桌面目标中引入，保持现有 Foundation 版本和固定 revision。
+  Unix 现在在发出配对请求前通过 xcsc `ConfigurationDirectory` 验证目录；新增回归覆盖此路径。
+- 共享媒体库无条件引入桌面 `xcsc::cli`，其服务管理代码无法为 iOS/Android 编译。
+  该依赖现在仅在桌面目标中引入，保持现有 xcsc 版本和固定 revision。
 - 媒体脚本依赖 macOS 默认没有的 `sha256sum`，且只接受 Linux companion 哈希。
   现在使用 Python 分块校验，分别固定 Linux x86_64 与 macOS ARM64 的 1.20.0 二进制哈希。
 
@@ -55,13 +55,17 @@ CI 的 macOS 原生构建任务现在同时执行完整 Rust 回归，以覆盖�
 CLI 验证使用 debug 构建允许的回环 HTTP 模拟 Server，没有连接真实 Server 或摄像头。
 iOS 模拟器启动不代表实机摄像头采集验收；本次未构建 Android APK，未运行 Windows/Linux 原生发行物。
 
-## 1.0.0 Foundation 升级复验
+## 1.0.0 xcsc 升级复验
 
-2026-10-08，将共享 Client 固定到正式 1.0.0 / a3c827b7f0f69d84ff69f72be1533a7171ab63d6，
-中立日志固定到正式 1.0.0 / d58b9ef0822984ee0d29fb8b8139cfd2787374fb。升级只改变 Foundation
+2026-10-08，将共享 Client 固定到正式 1.0.0 / 2644ff01f8a7e0fcc9d413b3964fe1e9ca9974b3，
+中立日志固定到正式 1.0.0 / 020b40b1185a604ced7a01230781a3eadffe64c2。升级只改变 xcsc
 来源及产品发行号，协议、配置、命令日志与录像身份保持。
 
 本地重新执行 fmt、完整 workspace 严格 Clippy、70 项常规 Rust 测试及 2 项真实合成媒体测试，
 CLI 模拟 Server 生命周期、iOS 设备/模拟器库和 Swift 应用测试、Android ARM64 release 库，
 以及 11 项安装器回归和 Windows WiX authoring。上述检查均通过；本地未构建 Android APK，
 未运行 Windows/Linux 原生安装器，正式发行另以最终提交的原生 CI 和实际 MSI/SCM 生命周期为准。
+
+## 当前单体公共支撑来源
+
+2026-10-10 当前 Client 只消费一个 xcsc 1.0.0 包，固定 `00770c007912b276f5bb1075abfefe3c31026276`；中立日志已经物理归入 `xcsc::log`，依赖图无 xcss。上述 2026-10-08 来源行是其当时的记录，不代表当前锁文件。单体迁移的角色门禁、原生测试及受控合成媒体证据按最终源码分别记录，不能代替实体摄像头和手机采集验收。

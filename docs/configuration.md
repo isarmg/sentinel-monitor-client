@@ -79,7 +79,7 @@ Windows 默认 `%ProgramData%\XcocClient` 目录和其中的配置、录影片�
 
 ```json
 {
-  "server": "https://xcoc.example.com",
+  "server": "https://xcos.example.com",
   "authorization_code": "REPLACE_WITH_INSTANCE_AUTHORIZATION_CODE",
   "name": "camera-edge-01"
 }
@@ -241,9 +241,9 @@ sudo xcoc status
 
 ## 配置文件安全与运行日志
 
-Unix 配置读写使用 Foundation `ConfigurationDirectory`：文件必须是服务用户拥有、单链接的普通文件，权限为 `0600` 或受控 `0640`，父路径不能经过符号链接。读取在分配前检查 1 MiB 上限，替换先同步临时文件，再原子 rename 并同步目录。公开可读、硬链接、符号链接或过大文件会拒绝，错误不会反射被拒绝的摄像头凭据。已有合法 `0640` 配置保留其 group 与权限。Windows 继续使用受保护 ACL 和原子替换。
+Unix 配置读写使用 xcsc `ConfigurationDirectory`：文件必须是服务用户拥有、单链接的普通文件，权限为 `0600` 或受控 `0640`，父路径不能经过符号链接。读取在分配前检查 1 MiB 上限，替换先同步临时文件，再原子 rename 并同步目录。公开可读、硬链接、符号链接或过大文件会拒绝，错误不会反射被拒绝的摄像头凭据。已有合法 `0640` 配置保留其 group 与权限。Windows 继续使用受保护 ACL 和原子替换。
 
-运行错误使用 Foundation 同一 `xcss-log` 输出 UTC JSON 行到 stderr；摄像头事件带 canonical UUID `instance_id`，失败使用稳定 `error_code`。不输出摄像头密码、RTSP URL、内部错误链或 FFmpeg 原始 stderr。日志写入失败返回明确错误，服务宿主可观察退出。
+运行错误使用 xcsc 内部 `xcsc::log` 输出 UTC JSON 行到 stderr；摄像头事件带 canonical UUID `instance_id`，失败使用稳定 `error_code`。不输出摄像头密码、RTSP URL、内部错误链或 FFmpeg 原始 stderr。日志写入失败返回明确错误，服务宿主可观察退出。
 
 
 ## 能力与工作预算
@@ -252,7 +252,7 @@ Unix 配置读写使用 Foundation `ConfigurationDirectory`：文件必须是服
 
 FFprobe 每次最多等待 12 秒，stdout 上限 256 KiB、stderr 上限 64 KiB；超限或超时立即终止并回收子进程，原始 stderr 不进入错误输出。ONVIF 发现只接受对应本次 MessageID 的响应，最多 256 个唯一设备，每个设备最多 8 个不含凭据的 HTTP 服务地址和 32 个 Scope；超限返回 `DISCOVERY_LIMIT_EXCEEDED` 和结构事件，不报告部分发现为完整成功。
 
-快照携带必填 `command_capacity`，Server 只下发该容量内的动作。Client 全局最多 256 个未完成动作、每相机最多 8 个；待确认结果、去重记录及正在发送的预留容量共用 4096 条记录预算。容量为 0 时仍发送状态和已有结果；超量动作在执行前明确拒绝，不静默丢弃 PTZ，也不通过无限积累消耗其他相机的处理空间。命令失败使用 Foundation 安全错误呈现与静态产品消息；保存配对后发生的故障明确保留已提交证据与继续操作说明。
+快照携带必填 `command_capacity`，Server 只下发该容量内的动作。Client 全局最多 256 个未完成动作、每相机最多 8 个；待确认结果、去重记录及正在发送的预留容量共用 4096 条记录预算。容量为 0 时仍发送状态和已有结果；超量动作在执行前明确拒绝，不静默丢弃 PTZ，也不通过无限积累消耗其他相机的处理空间。命令失败使用 xcsc 安全错误呈现与静态产品消息；保存配对后发生的故障明确保留已提交证据与继续操作说明。
 
 
 ## 动作确认与崩溃恢复
@@ -263,4 +263,4 @@ FFprobe 每次最多等待 12 秒，stdout 上限 256 KiB、stderr 上限 64 KiB
 
 结果获 Server 确认后仍保留至原到期时间后 120 秒；未确认的结果不因时间自动丢弃。日志达到上限时通过 command_capacity 停止接收新动作，继续发送已有结果。存储写入失败会停止执行；损坏或不兼容日志保留并明确报错。不要删除日志来重试 PTZ；先核对设备实际位置和 Server 的未确认结果，由操作者决定新的动作。
 
-运行权由 Foundation `SingleInstanceLock` 和独立私有 `.xcoc-runtime` 目录保护，拒绝不安全的锁路径。Linux 默认位于 `/var/lib/xcoc`，自定义配置使用该配置的父目录。配对文件与命令日志分别管理，凭据轮换不清除执行证据。
+运行权由 xcsc `SingleInstanceLock` 和独立私有 `.xcoc-runtime` 目录保护，拒绝不安全的锁路径。Linux 默认位于 `/var/lib/xcoc`，自定义配置使用该配置的父目录。配对文件与命令日志分别管理，凭据轮换不清除执行证据。

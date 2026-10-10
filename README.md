@@ -65,10 +65,12 @@ cargo +1.99.0 test --locked --workspace --all-targets --all-features
 
 ## 仓库布局
 
-根 Rust 包提供桌面 CLI 与共享摄像头/移动媒体库，`crates/mobile-ffi` 提供 Foundation v1 原生桥接，
+根 Rust 包提供桌面 CLI 与共享摄像头/移动媒体库，`crates/mobile-ffi` 提供 xcsc v1 原生桥接，
 `clients/android` 和 `clients/ios` 保存原生摄像头应用。`Cargo.lock` 固定 workspace 编译输入。
 `src/main/tests.rs` 和 `src/onvif/tests.rs` 验证 Client 生命周期与 ONVIF；根 `tests/` 保存独立验收。
 `protocol/` 保存固定 Server Source 的受控契约，`config/` 保存无凭据样例，`packaging/` 保存桌面安装器，
 `scripts/` 提供移动库构建，`docs/` 描述配置与运行。
 
 当前发布版本：**1.0.0**。参见 [1.0.0 发布说明](docs/releases/1.0.0.md)和[项目命名](docs/naming.md)。
+
+公共支撑的职责、单体依赖、平台边界与验证方法见[公共支撑说明](docs/common-support.md)。
