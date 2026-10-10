@@ -1,6 +1,6 @@
 # xcoc 开发与仓库结构
 
-桌面构建先准备[媒体运行时与原生依赖](media-worker.md)，移动端构建和签名按[移动端指南](mobile.md)。
+先选择构建目标：[Linux](platforms/linux.md#从源码构建)、[Windows](platforms/windows.md#从源码构建)、[macOS](platforms/macos.md#从源码构建)、[Android](platforms/android.md#从源码构建)或 [iOS](platforms/ios.md#从源码构建)。
 Android/iOS 不链接桌面媒体库；宿主 JVM/JNI 测试仍需宿主桌面依赖。
 
 ## 开发验证
@@ -12,6 +12,17 @@ cargo +1.99.0 fmt --all -- --check
 cargo +1.99.0 clippy --locked --workspace --all-targets --all-features -- -D warnings
 cargo +1.99.0 test --locked --workspace --all-targets --all-features
 ```
+
+## 媒体验收
+
+媒体验收可以在 Linux x86_64 或 macOS ARM64 配合对应平台固定的 MediaMTX 1.20.0 执行：
+
+```sh
+XCOC_TEST_MEDIAMTX=/absolute/path/to/mediamtx bash scripts/test-media.sh
+```
+
+脚本核对服务端已采用的 companion 哈希，生成临时证书和合成 H.264，在回环验证单输入并行
+探测/录像、原生 RTP 发布可由 RTSP 读出、生产入口拒绝不受信任证书；结束后清理临时进程和夹具。
 
 ## 仓库布局
 

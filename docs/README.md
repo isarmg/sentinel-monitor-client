@@ -4,6 +4,14 @@ xcoc 在摄像头所在网络采集视频，并向 xcos 发布码流。先选择
 
 当前源码准备的是 **1.1.0**。截至 2026-10-10，公开 GitHub Release 仍为 **v1.0.0，仅含桌面资产**；内置媒体工作进程和移动 Release 产物应从对应源码构建。下方 1.1.0 产物名称说明构建输出，不表示这些文件已经发布。
 
+## 选择平台
+
+- [Linux x86_64](platforms/linux.md)：systemd、源码构建、日志与卸载
+- [Windows x64](platforms/windows.md)：MSI、SCM、原生构建与后台诊断
+- [macOS Apple Silicon](platforms/macos.md)：手工安装、launchd 与 arm64 构建
+- [Android](platforms/android.md)：arm64 APK/AAB、签名、ADB 与摄像头服务
+- [iOS](platforms/ios.md)：Xcode、签名、模拟器与真机采集
+
 ## 开始使用
 
 1. [选择平台并安装](platform-setup.md)：Linux、Windows、macOS、Android 和 iOS。
@@ -15,7 +23,7 @@ xcoc 在摄像头所在网络采集视频，并向 xcos 发布码流。先选择
 
 - [支持的摄像头](camera-support.md)：品牌预设、USB/内置摄像头与手机采集。
 - [桌面媒体运行时与构建](media-worker.md)：静态媒体库、平台依赖、许可证。
-- [Android/iOS 构建与签名](mobile.md)：原生采集、Release 输出、实机安装要求。
+- [移动端共同说明](mobile.md)：配对、凭据、ABI 与 Release 输出校验。
 - [开发与验证](development.md)、[状态与动作参考](runtime-reference.md)。
 - [摄像头验证记录](camera-validation.md)、[公共支撑](common-support.md)、[安全审查](unsafe-audit.md)。
 - [1.1.0 发布准备说明](releases/1.1.0.md)、[1.0.0 发行记录](releases/1.0.0.md)、[项目首页](../README.md)。

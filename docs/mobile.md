@@ -4,7 +4,7 @@
 发布授权。摄像头采集与协议转换均在客户端，服务端看见 `rtsp` 设备。当前支持一台设备的一份配对、
 一个视频主码流，录像位置为服务端。应用版本仍随客户端包版本。
 
-Android/iOS 从安装、配对、重新配对到采集启停、诊断与卸载的逐步流程见[分平台部署指南](platform-setup.md)。本文保留移动媒体边界与构建细节。
+按设备选择 [Android 安装与构建](https://github.com/isarmg/xcoc/blob/main/docs/platforms/android.md)或 [iOS 安装与构建](https://github.com/isarmg/xcoc/blob/main/docs/platforms/ios.md)。本文保存两端共用的配对、凭据、ABI 与发布校验说明。
 
 ## 使用
 
@@ -22,47 +22,15 @@ Android 连接状态见常驻通知，通知和界面均可停止。iOS 连接�
 
 ## Android 构建
 
-需要 Rust 1.99、JDK 17、Gradle 8.13、Android SDK 36、NDK r28 或更新版本和 cargo-ndk 4.1.2。
-应用最低 Android 8.0/API 26，提供 arm64-v8a 原生库。Android/iOS 目标不编译或链接桌面 FFmpeg shim；宿主 JVM/JNI 测试针对桌面目标构建，需先按[桌面媒体运行时](media-worker.md)准备宿主原生依赖。
-
-```sh
-rustup target add --toolchain 1.99.0 aarch64-linux-android
-cargo +1.99.0 install cargo-ndk --version 4.1.2 --locked
-export ANDROID_NDK_HOME=/absolute/path/to/android-sdk/ndk/28.2.13676358
-bash scripts/build-android-rust.sh
-cargo +1.99.0 build --locked -p xcoc-mobile-ffi --features jni-host-tests
-gradle -p clients/android testDebugUnitTest assembleDebug
-```
-
-测试 APK 在 `clients/android/app/build/outputs/apk/debug/`。Release APK/AAB 构建与签名边界见下文。
-本仓库未放入签名密钥。arm64 原生库构建输出在 `clients/android/app/src/main/jniLibs/`，由 Git 忽略。
+工具链、Debug/Release 命令、签名、ADB 安装和诊断见 [Android 指南](https://github.com/isarmg/xcoc/blob/main/docs/platforms/android.md)。
 
 ## iOS 构建
 
-需要 macOS、Xcode（含 iOS SDK）、XcodeGen 和 Rust 1.99。最低 iOS 16；设备与模拟器原生库都是
-arm64。源码中的 XcodeGen 配置负责生成工程，Vendor 目录只保存生成产物。
-
-```sh
-rustup target add --toolchain 1.99.0 aarch64-apple-ios aarch64-apple-ios-sim
-bash scripts/build-ios-rust.sh
-cd clients/ios
-xcodegen generate
-xcodebuild -project XcocCamera.xcodeproj -scheme XcocCamera -sdk iphonesimulator \
-  -destination 'platform=iOS Simulator,name=iPhone 16' CODE_SIGNING_ALLOWED=NO test
-```
-
-实机安装时在 Xcode 选择自己的开发团队和目标设备。模拟器只能验证应用构建与协议转换单元测试，
-真实视频采集必须使用实机。没有声明 iOS 摄像头后台常驻能力。
+Mac 工具链、XCFramework、模拟器、实机签名和诊断见 [iOS 指南](https://github.com/isarmg/xcoc/blob/main/docs/platforms/ios.md)。
 
 ## 开发检查
 
-以下工作区检查在宿主桌面目标执行，需要桌面媒体库依赖；这不表示手机应用依赖 FFmpeg。
-
-```sh
-cargo +1.99.0 fmt --all -- --check
-cargo +1.99.0 clippy --locked --workspace --all-targets --all-features -- -D warnings
-cargo +1.99.0 test --locked --workspace --all-targets --all-features
-```
+跨平台工作区检查统一见[开发指南](https://github.com/isarmg/xcoc/blob/main/docs/development.md#开发验证)。宿主检查需准备桌面媒体库；手机目标使用系统采集和编码器。
 
 共享移动端 ABI 使用 xcsc revision 1：长度限定的输入、代际句柄、拥有所有权的结果和 panic
 边界。C 调用方初始化结果后，读取并用 `xcsc_ffi_result_free_v1` 释放一次；编码帧在返回前复制，
@@ -73,14 +41,7 @@ CI 包含 Android Debug/Release APK、Release AAB、Kotlin 单元测试与 lint�
 iOS Debug/Release 模拟器构建、Swift 单元测试及未签名实机 Release archive。构建源码的本地检查与
 实机能力认证必须分别记录，不能把 Linux Rust 测试当作 Android/iOS 应用实际验收。
 
-媒体验收可以在 Linux x86_64 或 macOS ARM64 配合对应平台固定的 MediaMTX 1.20.0 执行：
-
-```sh
-XCOC_TEST_MEDIAMTX=/absolute/path/to/mediamtx bash scripts/test-media.sh
-```
-
-脚本核对服务端已采用的 companion 哈希，生成临时证书和合成 H.264，在回环验证单输入并行
-探测/录像、原生 RTP 发布可由 RTSP 读出、生产入口拒绝不受信任证书；结束后清理临时进程和夹具。
+共享媒体回环验收见[开发指南](https://github.com/isarmg/xcoc/blob/main/docs/development.md#媒体验收)。
 
 ## 移动端 Release 构建输出
 
@@ -105,42 +66,11 @@ FFmpeg shim 或桌面媒体依赖。
 
 ### 签名后安装或分发
 
-Android 的 APK 必须使用所有者稳定保管的 release key 签名后才能安装；AAB 不能直接安装，
-需要签名后交由适用的分发流程生成 APK。不要用临时/debug key 冒充正式发行签名；更换签名会影响
-后续更新能力。当前 CI 不创建或读取签名密钥，也不把 Debug APK 作为 Release 资产。
-
-iOS 同时提供 `.xcarchive` 和由该归档中实机 app 打包的 `-unsigned.ipa`。未签名 IPA 也不能直接
-装到 iPhone；它只提供标准 `Payload/XcocCamera.app` 布局，不代表已完成签名、provisioning 或
-App Store 验证。所有者需要使用自己的 Apple 签名身份、开发团队和适用的 provisioning profile，
-按实际分发方式签名/导出。Apple 签名身份、开发团队、协议和分发账号由应用所有者管理。
-模拟器 app 可解压后用 `xcrun simctl install booted XcocCamera.app` 安装到已启动的 arm64 模拟器；
-模拟器测试不证明真实摄像头采集或实机分发可用。
+选择 [Android 签名与安装](https://github.com/isarmg/xcoc/blob/main/docs/platforms/android.md#release-签名与安装)或 [iOS 签名与安装](https://github.com/isarmg/xcoc/blob/main/docs/platforms/ios.md#release-签名与安装)。未签名文件不能直接安装到真实设备；各平台指南说明 APK/AAB、IPA/archive 与模拟器 app 的用途。
 
 ### 本地 Release 构建
 
-先完成上面的对应平台原生库和工具链准备。Android 还需构建供 JVM 测试使用的宿主 JNI bridge，
-并按桌面文档准备宿主媒体库。然后执行：
-
-```sh
-python3 packaging/mobile/release.py check
-gradle -p clients/android testReleaseUnitTest assembleRelease bundleRelease lintRelease
-python3 packaging/mobile/release.py android --aapt2 "$ANDROID_HOME/build-tools/36.0.0/aapt2"
-```
-
-macOS 上生成 Xcode 工程后，使用与 CI 相同的 Release 参数：
-
-```sh
-xcodebuild -project clients/ios/XcocCamera.xcodeproj -scheme XcocCamera \
-  -configuration Release -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
-  -derivedDataPath clients/ios/ReleaseBuild/simulator \
-  CODE_SIGNING_ALLOWED=NO ENABLE_TESTABILITY=NO ARCHS=arm64 ONLY_ACTIVE_ARCH=NO build
-xcodebuild -project clients/ios/XcocCamera.xcodeproj -scheme XcocCamera \
-  -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
-  -archivePath clients/ios/ReleaseBuild/XcocCamera.xcarchive \
-  -derivedDataPath clients/ios/ReleaseBuild/device \
-  CODE_SIGNING_ALLOWED=NO ARCHS=arm64 ONLY_ACTIVE_ARCH=NO archive
-python3 packaging/mobile/release.py ios
-```
+按 [Android Release 构建](https://github.com/isarmg/xcoc/blob/main/docs/platforms/android.md#本地-release-构建)或 [iOS Release 构建](https://github.com/isarmg/xcoc/blob/main/docs/platforms/ios.md#本地-release-构建)执行。
 
 产物输出在 `dist/`。验证脚本拒绝版本漂移、Debug APK、错误 app ID/目标平台、缺少或非 arm64 的
 原生库，以及混入签名的“unsigned”产物。IPA 另核对 Payload 布局、实机 app 标识/版本、arm64 Mach-O
@@ -151,5 +81,4 @@ DerivedData 在 Release 下启用 testability 跑 Swift 测试，最终模拟器
 CURRENT_PROJECT_VERSION。Android versionCode 使用 `major*1000000 + minor*1000 + patch`；iOS
 使用 `major.minor.patch`，并由共享校验器检查平台允许的数字范围。
 
-参考 [Android 应用签名](https://developer.android.com/studio/publish/app-signing) 和
-[Apple 分发与归档说明](https://developer.apple.com/documentation/xcode/distributing-your-app-for-beta-testing-and-releases)。
+参考 [Android 应用签名](https://developer.android.com/studio/publish/app-signing)和 [Apple 分发与归档说明](https://developer.apple.com/documentation/xcode/distributing-your-app-for-beta-testing-and-releases)。

@@ -56,58 +56,18 @@ OpenSSL TLS 后端，macOS 使用系统 SecureTransport，Windows 使用系统 S
 
 ### Linux x86_64
 
-需要 Rust 1.99.0、C 编译器、make、curl、pkg-config、Python 3、tar/xz 和 OpenSSL 开发包及
-静态库。以 Debian/Ubuntu 构建机为例：
+本平台的工具链、原生依赖与完整构建命令见 [Linux x86_64 构建](platforms/linux.md#从源码构建)。
 
-```sh
-sudo apt update
-sudo apt install build-essential curl pkg-config python3 xz-utils libssl-dev binutils
-bash packaging/native/build-unix.sh "$PWD/target/native-media"
-export PKG_CONFIG_PATH="$PWD/target/native-media/lib/pkgconfig"
-cargo +1.99.0 build --locked --release
-python3 packaging/native/check-runtime.py ./target/release/xcoc
-```
-
-脚本固定并校验 FFmpeg 源码，禁用外部自动发现、程序、GPL/nonfree 组件和不需要的库，静态链接
-OpenSSL。发行审计须确认不存在额外 `libav*` 或 OpenSSL 动态依赖；安装构建机的旧版 `ffmpeg`
-命令不能替代此步骤。构建机的系统 C 库基线仍约束发行物能运行的 Linux 版本。
 
 ### macOS arm64
 
-需要 Apple Silicon、Xcode Command Line Tools、Rust 1.99.0、Python 3、pkg-config 与 xz。
-已使用 Homebrew 的构建机可安装这些构建工具：
+本平台的工具链、原生依赖与完整构建命令见 [macOS arm64 构建](platforms/macos.md#从源码构建)。
 
-```sh
-brew install pkg-config python xz
-bash packaging/native/build-unix.sh "$PWD/target/native-media"
-export PKG_CONFIG_PATH="$PWD/target/native-media/lib/pkgconfig"
-cargo +1.99.0 build --locked --release
-python3 packaging/native/check-runtime.py ./target/release/xcoc
-```
-
-脚本使用系统 SecureTransport，不链接 Homebrew FFmpeg/OpenSSL dylib。`brew install ffmpeg`
-只用于外部本地设备采集，不是这个构建过程的必需步骤。部署仍为手工安装 arm64 tar 包；必须在
-支持的 macOS 目标上检查实际系统框架和最低系统版本，不以 Linux 的构建结果代替。
 
 ### Windows x64
 
-需要 Visual Studio C++ Build Tools/Windows SDK、Rust MSVC 工具链、PowerShell、Python 3 和 Git。
-原生脚本从官方来源获取固定 vcpkg revision，使用 `x64-windows-static` triplet，只选择 FFmpeg 的
-`avcodec`、`avformat` 功能与内置编解码器；Windows TLS 使用 Schannel。
-Rust 构建必须同时设置 `RUSTFLAGS=-C target-feature=+crt-static`，与原生静态 CRT 保持一致。
-不要混用动态 CRT triplet、另一个 vcpkg 安装树或任意下载的 FFmpeg DLL。
+本平台的工具链、原生依赖与完整构建命令见 [Windows x64 构建](platforms/windows.md#从源码构建)。
 
-在 x64 Native Tools PowerShell 中执行：
-
-```powershell
-. .\packaging\native\build-windows.ps1 -WorkDirectory "$PWD\target\native-media"
-cargo +1.99.0 build --locked --release
-python packaging/native/check-runtime.py target/release/xcoc.exe
-```
-
-脚本设置 `VCPKG_ROOT`、`VCPKG_INSTALLED_ROOT`、`VCPKGRS_TRIPLET` 和 `RUSTFLAGS`；必须在
-同一 PowerShell 会话中继续构建。依赖检查还会执行 `media-worker --check`。
-MSI 和 ZIP 使用同一个静态媒体库构建的单文件客户端，发布前必须完成依赖审计；DirectShow 摄像头另需 `ffmpeg.exe` 与 `libx264`。
 
 ## 发行与验证边界
 

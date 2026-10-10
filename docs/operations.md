@@ -9,14 +9,7 @@
 3. `xcoc status` 和 `xcoc camera list`：核对配对实例与摄像头配置。
 4. 查看实际运行服务及最近错误，再到 xcos 检查快照、画面和录像。
 
-Linux 默认服务：
-
-```sh
-systemctl status xcoc.service --no-pager
-sudo journalctl -u xcoc.service -n 100 --no-pager
-```
-
-Windows 使用 `Get-Service XcocClient` 和下方日志命令；macOS 使用平台指南中实际安装的 launchd job 或前台终端。
+服务与日志命令按系统查阅：[Linux](platforms/linux.md#5-诊断)、[Windows](platforms/windows.md#5-诊断)、[macOS](platforms/macos.md#4-诊断和卸载)。
 内置/USB 摄像头还需在服务的 PATH 中找到带对应采集后端和 `libx264` 的 `ffmpeg`。网络摄像头使用内置媒体库。
 
 ## 按症状排查
@@ -29,7 +22,6 @@ Windows 使用 `Get-Service XcocClient` 和下方日志命令；macOS 使用平�
 | ONVIF 发现为空 | 摄像头网段、路由、UDP 3702 | 使用可达网络，或在配置中直接填写设备服务 URL |
 | 已配置但无画面 | 摄像头凭据、主码流、RTSPS 地址和证书 | 实际设备可读，发布证书可信且名称匹配，客户端可达发布端口 |
 | 配置改变后显示旧状态 | 服务运行、配置路径、实例 UUID | 等待下一份快照；确认改的是该服务读取的配置 |
-| Windows 已配对但服务未启动 | 管理员终端中的 `xcoc service` | 使用已保存凭据继续启动；不开机自启时加 `--no-boot-start` |
 | 本地录像正常、远端离线 | 服务端连接和发布授权 | 恢复连接后核对新快照和画面；本地录像继续保存 |
 
 ## 状态文件错误
@@ -49,14 +41,4 @@ Windows 使用 `Get-Service XcocClient` 和下方日志命令；macOS 使用平�
 
 ## Windows 后台诊断
 
-SCM 在私有状态校验后创建 `%ProgramData%/XcocClient/logs`，使用共享类型化的 sink 写入 `xcoc.jsonl`。最多保留活动文件和四份归档，每份 8 MiB，总上限 40 MiB。服务账户首次创建此目录；管理员查询不会先替服务建立日志目录。ACL 拒绝普通用户，已有不安全对象不修复。服务启动失败且日志输出器尚不可用时，可同时查看 Windows SCM 的服务退出代码。
-
-日志按活动文件 `xcoc.jsonl` 和归档 `xcoc.jsonl.1` 至 `.4` 查询。Windows 服务使用 LocalSystem；目录仅授予 SYSTEM 和 Administrators 访问。
-
-```powershell
-xcoc logs --tail 100 --format json
-xcoc logs --since 2026-10-07T00:00:00Z --level warn --format json
-xcoc logs --follow --format ndjson --timeout 60s
-```
-
-可用 `--instance-id`、`--event`、`--request-id` 和 `--task-id` 精确筛选。后台整体启动事件使用 `scope=client`；属于某个已知实例的事件使用 `scope=instance` 并携带 `instance_id`。日志源损坏、超限或持续跟踪游标已从保留窗口移除时明确失败，避免把丢失记录显示为空成功。
+SCM 日志路径、权限、轮转和查询示例统一见 [Windows 后台日志与权限](platforms/windows.md#后台日志与权限)。
