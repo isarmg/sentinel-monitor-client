@@ -294,7 +294,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires FFmpeg with libx264 and XCOC_TEST_CLIENT_EXE; run in media CI"]
+    #[ignore = "requires FFmpeg/FFprobe with libx264 and XCOC_TEST_CLIENT_EXE; run in media CI"]
     async fn one_capture_serves_simultaneous_probe_and_recording_then_releases_port() {
         use crate::device::{
             ControlTarget, DeviceCapabilities, DeviceIdentity, MediaSource, ResolvedDevice,
@@ -350,10 +350,16 @@ mod tests {
             let mut child = crate::media_worker::spawn_recorder(&executable, &source, &pattern)
                 .await
                 .unwrap();
-            tokio::time::timeout(std::time::Duration::from_secs(20), child.wait())
+            // Tokio wait() closes Child.stdin. Keep the supervisor control
+            // pipe open so this fixture observes capture interruption rather
+            // than requesting an early graceful stop through stdin EOF.
+            let control = child.stdin.take().expect("recorder control pipe");
+            let status = tokio::time::timeout(std::time::Duration::from_secs(20), child.wait())
                 .await
                 .unwrap()
-                .unwrap()
+                .unwrap();
+            drop(control);
+            status
         };
         let (probe, recording) = tokio::join!(device.probe_streams(&executable), recording);
         probe.expect("synthetic worker probe");
@@ -362,6 +368,7 @@ mod tests {
         // while trailer cleanup preserves the completed recording. The old
         // fixture's FFmpeg -t 3 instead stopped itself before capture ended.
         assert!(!recording.success());
+        assert!(!relay.is_alive(), "recorder exited before capture ended");
         let outputs = std::fs::read_dir(directory.path())
             .unwrap()
             .collect::<Result<Vec<_>, _>>()
@@ -401,6 +408,38 @@ mod tests {
             decoded.status.success(),
             "interrupted recording is not decodable"
         );
+        let mut inspector = tokio::process::Command::new("ffprobe");
+        inspector
+            .args([
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "json",
+            ])
+            .arg(&output);
+        let inspected = xcsc::runtime::process::capture_bounded(
+            &mut inspector,
+            xcsc::runtime::process::ProcessLimits {
+                timeout: std::time::Duration::from_secs(20),
+                stdout_bytes: 65536,
+                stderr_bytes: 65536,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(
+            inspected.status.success(),
+            "recording duration is unreadable"
+        );
+        let metadata: serde_json::Value = serde_json::from_slice(&inspected.stdout).unwrap();
+        let duration: f64 = metadata["format"]["duration"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!(duration >= 5.0, "capture was cut short: {duration}s");
         let address = url::Url::parse(&relay.url).unwrap();
         let port = address.port().unwrap();
         let task = relay.task.clone();
@@ -413,10 +452,15 @@ mod tests {
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
+        assert!(task.is_finished(), "capture task did not stop");
         assert!(
             tokio::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port))
                 .await
                 .is_err()
         );
+        let rebound = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port))
+            .await
+            .expect("capture relay did not release its listening port");
+        drop(rebound);
     }
 }
