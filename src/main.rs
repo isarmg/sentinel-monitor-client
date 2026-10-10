@@ -2032,13 +2032,22 @@ async fn spawn_publisher(source: &device::MediaSource, destination: &str) -> any
 
 async fn spawn_recorder(source: &device::MediaSource, camera_id: Uuid) -> anyhow::Result<Child> {
     let root = prepare_recording_directory(&recording_root(), camera_id)?;
-    let pattern = root.join("%Y-%m-%d_%H-%M-%S.mp4");
+    let pattern = local_recording_pattern(&root);
     xcoc::media_worker::spawn_recorder(
         &std::env::current_exe().context("locate media worker")?,
         source,
         &pattern,
     )
     .await
+}
+
+fn local_recording_pattern(root: &Path) -> PathBuf {
+    // The offset distinguishes a repeated daylight-saving hour; a per-worker
+    // identity preserves the previous segment after a same-second restart.
+    root.join(format!(
+        "%Y-%m-%d_%H-%M-%S%z_{}.mp4",
+        Uuid::new_v4().simple()
+    ))
 }
 
 fn prepare_recording_directory(store: &Path, camera_id: Uuid) -> anyhow::Result<PathBuf> {

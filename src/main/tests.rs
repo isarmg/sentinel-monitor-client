@@ -1336,3 +1336,36 @@ fn shared_configuration_io_rejects_links_public_credentials_and_unsafe_replaceme
     assert!(load_state(&alias_parent.join("config.json")).is_err());
     assert!(save_state(&alias_parent.join("config.json"), &state).is_err());
 }
+
+#[test]
+fn local_recording_names_survive_daylight_saving_fallback() {
+    let root = Path::new("recordings");
+    let pattern = local_recording_pattern(root);
+    let name = pattern.file_name().unwrap().to_str().unwrap();
+    let before = chrono::DateTime::parse_from_rfc3339("2026-11-01T01:15:00-04:00").unwrap();
+    let after = chrono::DateTime::parse_from_rfc3339("2026-11-01T01:15:00-05:00").unwrap();
+    assert_ne!(
+        before.format(name).to_string(),
+        after.format(name).to_string(),
+        "the repeated daylight-saving hour must not reuse an earlier segment"
+    );
+    assert_eq!(pattern.parent(), Some(root));
+    assert_eq!(pattern.extension().unwrap(), "mp4");
+}
+
+#[test]
+fn local_recording_names_survive_same_second_restarts() {
+    let root = Path::new("recordings");
+    let first = local_recording_pattern(root);
+    let restarted = local_recording_pattern(root);
+    let now = chrono::DateTime::parse_from_rfc3339("2026-11-01T01:15:00-04:00").unwrap();
+    let filename = |path: &Path| {
+        now.format(path.file_name().unwrap().to_str().unwrap())
+            .to_string()
+    };
+    assert_ne!(
+        filename(&first),
+        filename(&restarted),
+        "restarting a recorder within the same second must not replace its last segment"
+    );
+}
