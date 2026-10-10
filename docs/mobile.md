@@ -82,9 +82,11 @@ XCOC_TEST_MEDIAMTX=/absolute/path/to/mediamtx bash scripts/test-media.sh
 脚本核对服务端已采用的 companion 哈希，生成临时证书和合成 H.264，在回环验证单输入并行
 探测/录像、原生 RTP 发布可由 RTSP 读出、生产入口拒绝不受信任证书；结束后清理临时进程和夹具。
 
-## 移动端 Release 产物
+## 移动端 Release 构建输出
 
-主分支和 PR 的完整 CI 会实际构建 Android/iOS Release，并上传以下 Actions artifacts；
+以下文件由当前源码的完整 CI 或手动构建生成。公开 v1.0.0 Release 不包含移动资产；1.1.0 标签和 Release 发布完成后，才可从对应下载页取得同版文件。
+
+主分支和 PR 的完整 CI 定义了 Android/iOS Release 构建，并上传以下 Actions artifacts；
 也可在 `xcoc Mobile Release builds` workflow 选择明确源码 ref 手动构建。手动执行只保留构建产物，
 不创建 Release、不移动标签，也不上传应用商店。Android/iOS Release 失败会使对应 CI 检查失败。
 
@@ -101,7 +103,7 @@ XCOC_TEST_MEDIAMTX=/absolute/path/to/mediamtx bash scripts/test-media.sh
 现有标签和已有 Release 不会被覆盖；不得把新源码产物附到旧版本标签。移动端原生库不会打包桌面
 FFmpeg shim 或桌面媒体依赖。
 
-### 未签名不等于可安装发行版
+### 签名后安装或分发
 
 Android 的 APK 必须使用所有者稳定保管的 release key 签名后才能安装；AAB 不能直接安装，
 需要签名后交由适用的分发流程生成 APK。不要用临时/debug key 冒充正式发行签名；更换签名会影响
@@ -110,7 +112,7 @@ Android 的 APK 必须使用所有者稳定保管的 release key 签名后才能
 iOS 同时提供 `.xcarchive` 和由该归档中实机 app 打包的 `-unsigned.ipa`。未签名 IPA 也不能直接
 装到 iPhone；它只提供标准 `Payload/XcocCamera.app` 布局，不代表已完成签名、provisioning 或
 App Store 验证。所有者需要使用自己的 Apple 签名身份、开发团队和适用的 provisioning profile，
-按实际分发方式签名/导出。当前 workflow 不创建 Apple 证书，不接受开发者协议，不上传 TestFlight/App Store。
+按实际分发方式签名/导出。Apple 签名身份、开发团队、协议和分发账号由应用所有者管理。
 模拟器 app 可解压后用 `xcrun simctl install booted XcocCamera.app` 安装到已启动的 arm64 模拟器；
 模拟器测试不证明真实摄像头采集或实机分发可用。
 
@@ -149,5 +151,5 @@ DerivedData 在 Release 下启用 testability 跑 Swift 测试，最终模拟器
 CURRENT_PROJECT_VERSION。Android versionCode 使用 `major*1000000 + minor*1000 + patch`；iOS
 使用 `major.minor.patch`，并由共享校验器检查平台允许的数字范围。
 
-参考 [Android 命令行构建与签名](https://developer.android.com/build/building-cmdline) 和
+参考 [Android 应用签名](https://developer.android.com/studio/publish/app-signing) 和
 [Apple 分发与归档说明](https://developer.apple.com/documentation/xcode/distributing-your-app-for-beta-testing-and-releases)。

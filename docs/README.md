@@ -1,23 +1,23 @@
 # xcoc 文档
 
-本文档集描述当前 `1.1.0` 实现。命令行帮助、`src/main.rs` 的严格输入结构和
-`src/device.rs` 的适配器模型是行为事实源；Release 说明只记录对应历史版本的变化。
+xcoc 在摄像头所在网络采集视频，并向 xcos 发布码流。先选择平台，再完成配对和画面验证。
 
-| 文档 | 内容 |
-|---|---|
-| [../README.md](../README.md) | GitHub 首页简介、功能、平台和部署入口 |
-| [platform-setup.md](platform-setup.md) | Linux、Windows、macOS、Android、iOS 安装、配对/重配、服务或采集启停、诊断与卸载，含命令解释 |
-| [configuration.md](configuration.md) | 配对、RTSP/ONVIF 配置、热更新、授权码轮换和完整验证 |
-| [operations.md](operations.md) | 运行边界、录像位置、安全要求和故障定位 |
-| [media-worker.md](media-worker.md) | 内置媒体工作进程、凭据传输、原生库构建与发行依赖 |
-| [camera-support.md](camera-support.md) | 品牌预设、电脑摄像头和客户端 RTSP 协议转换 |
-| [mobile.md](mobile.md) | Android/iOS 原生采集、构建和操作 |
-| [camera-validation.md](camera-validation.md) | 本次摄像头扩展的验证结果与实机待验范围 |
-| [releases/](releases/) | 各已发布版本的变更记录 |
-| [development.md](development.md) | 仓库结构、宿主依赖与开发验证 |
-| [unsafe-audit.md](unsafe-audit.md) | 当前依赖选择、unsafe 边界和验证 |
+当前源码准备的是 **1.1.0**。截至 2026-10-10，公开 GitHub Release 仍为 **v1.0.0，仅含桌面资产**；内置媒体工作进程和移动 Release 产物应从对应源码构建。下方 1.1.0 产物名称说明构建输出，不表示这些文件已经发布。
 
-客户端管理摄像头侧状态，线协议固定为
-`xcos-edge-v1`；一份本地安装可以保存多个已配对实例，但每个实例只对应一台摄像机。
+## 开始使用
 
-公共支撑的职责、单体依赖、平台边界与验证方法见[公共支撑说明](common-support.md)。
+1. [选择平台并安装](platform-setup.md)：Linux、Windows、macOS、Android 和 iOS。
+2. [配对与摄像头配置](configuration.md)：交互配对、RTSP/ONVIF、录像位置和设置更新。
+3. [日常使用](usage.md)：确认画面、管理实例、改配置与轮换授权码。
+4. [运行维护与排障](operations.md)：状态、日志、录像和常见错误。
+
+## 开发与参考
+
+- [支持的摄像头](camera-support.md)：品牌预设、USB/内置摄像头与手机采集。
+- [桌面媒体运行时与构建](media-worker.md)：静态媒体库、平台依赖、许可证。
+- [Android/iOS 构建与签名](mobile.md)：原生采集、Release 输出、实机安装要求。
+- [开发与验证](development.md)、[状态与动作参考](runtime-reference.md)。
+- [摄像头验证记录](camera-validation.md)、[公共支撑](common-support.md)、[安全审查](unsafe-audit.md)。
+- [1.1.0 发布准备说明](releases/1.1.0.md)、[1.0.0 发行记录](releases/1.0.0.md)、[项目首页](../README.md)。
+
+一份桌面安装可保存多个配对实例，每个实例对应一台摄像机。移动应用管理一份配对和一个主码流。设备协议为 `xcos-edge-v1`。

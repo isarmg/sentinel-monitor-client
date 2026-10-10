@@ -1,122 +1,57 @@
-# xcoc 运维
+# 运行维护与排障
 
-完整的逐平台安装、配对、服务启停、升级与卸载见[分平台部署指南](platform-setup.md)。本文补充运行数据和故障边界。
+服务安装和启停见[平台指南](platform-setup.md)，配对和摄像头 JSON 见[配置指南](configuration.md)。本文用于已经配置的客户端。
 
-## 1. 前置条件与状态文件
+## 检查顺序
 
-当前版本为 `1.1.0`。先用 `xcoc media-worker --check` 检查内置媒体运行时；网络摄像头无需 `ffmpeg` 或 `ffprobe` 命令，内置/USB 摄像头另需后台服务能找到支持该设备后端与 `libx264` 的 `ffmpeg`。构建/库依赖见[桌面媒体运行时](media-worker.md)。默认配置路径为：
+1. `xcoc --version`：确认正在使用对应源码版本的程序。
+2. `xcoc media-worker --check`：桌面内置媒体库检查应成功。
+3. `xcoc status` 和 `xcoc camera list`：核对配对实例与摄像头配置。
+4. 查看实际运行服务及最近错误，再到 xcos 检查快照、画面和录像。
 
-- Linux：`/etc/isarmg/xcoc/config.json`
-- macOS：`/Library/Application Support/XcocClient/config.json`
-- Windows：`%ProgramData%\XcocClient\config.json`
-
-Linux 安装包解压后运行 `sudo ./packaging/linux/install.sh`，Windows 使用 MSI。安装全部功能并立即运行后台服务；Linux 的开机自启提示回车默认为 Yes，Windows 交互配对时的同名提示回车也默认为 Yes。非交互配对默认 Yes。服务会在尚未配对时等待配置。
-
-可用全局 `--config PATH` 指向其他文件。配置包含长期客户端 token、摄像头地址和可选账号密码，必须限制为服务
-账户可读；不要把配置、stdin bootstrap JSON 或带凭据的 RTSP URL 手工写入日志、CLI 启动参数或工单。摄像头凭据、发布 JWT 和私有回环地址通过有界匿名 stdin 管道传给媒体工作进程，不放入进程参数、环境变量或临时凭据文件；媒体库原始日志被抑制，本地采集进程 stderr 被丢弃。管理员及具备进程调试/内存读取权限的本机账户仍可能访问运行中的秘密，必须限制服务账户权限和本机登录。
-Windows 默认 `%ProgramData%\XcocClient` 的配置和录像由客户端收紧为仅 SYSTEM 和 Administrators 可读写内容；旧普通用户所有者无法重写 ACL。自定义 `--config` 的父目录不会自动调整权限，必须预先使用受保护的专用目录。Windows 配对已保存但服务未启动时，以管理员身份运行 `xcoc service`；若选择不开机自启，使用 `xcoc service --no-boot-start`，无需再次使用授权码。Windows MSI 升级可能将先前的不开机自启设置恢复为自动启动，升级后可重设。
-
-## 2. 配对与摄像头配置
-
-交互式流程会先检查内置媒体运行时，再完成配对、发现/录入摄像头并通过媒体库实际验证码流：
+Linux 默认服务：
 
 ```sh
-sudo xcoc setup --interactive
+systemctl status xcoc.service --no-pager
+sudo journalctl -u xcoc.service -n 100 --no-pager
 ```
 
-自动化配对从 stdin 读取严格 JSON，不接受未知字段：
+Windows 使用 `Get-Service XcocClient` 和下方日志命令；macOS 使用平台指南中实际安装的 launchd job 或前台终端。
+内置/USB 摄像头还需在服务的 PATH 中找到带对应采集后端和 `libx264` 的 `ffmpeg`。网络摄像头使用内置媒体库。
 
-```json
-{
-  "server": "https://xcos.example.com",
-  "authorization_code": "36 位小写英文字母数字授权码",
-  "name": "camera-edge-01"
-}
-```
+## 按症状排查
 
-```sh
-sudo xcoc setup --input-stdin < bootstrap.json
-```
+| 症状 | 检查 | 预期结果与下一步 |
+|---|---|---|
+| setup 在请求前失败 | `media-worker --check`、本地采集依赖 | 媒体检查通过；源码构建按[媒体指南](media-worker.md)核对原生链接 |
+| `pairing_authorization_rejected` | xcos 实例和授权码 | 使用原实例的有效授权码；需要重配时由服务端生成新码 |
+| `pairing_protocol_unsupported` | 两端版本与协议 | 两端均支持 `xcos-edge-v1` |
+| ONVIF 发现为空 | 摄像头网段、路由、UDP 3702 | 使用可达网络，或在配置中直接填写设备服务 URL |
+| 已配置但无画面 | 摄像头凭据、主码流、RTSPS 地址和证书 | 实际设备可读，发布证书可信且名称匹配，客户端可达发布端口 |
+| 配置改变后显示旧状态 | 服务运行、配置路径、实例 UUID | 等待下一份快照；确认改的是该服务读取的配置 |
+| Windows 已配对但服务未启动 | 管理员终端中的 `xcoc service` | 使用已保存凭据继续启动；不开机自启时加 `--no-boot-start` |
+| 本地录像正常、远端离线 | 服务端连接和发布授权 | 恢复连接后核对新快照和画面；本地录像继续保存 |
 
-同一服务端实例轮换授权码后，运行 `setup --input-stdin` 会保存新访问凭据并保留摄像头配置；`--replace` 用于归档损坏或不兼容的旧配对文件。配对已提交但摄像头配置失败时，不要重新创建实例，使用输出的实例 ID 继续：
+## 状态文件错误
 
-```sh
-sudo xcoc camera discover --timeout-seconds 3
-sudo xcoc camera apply --instance-id INSTANCE_UUID --input-stdin < camera.json
-```
+- `pairing_state_incompatible`：保留原文件，核对错误后用新的授权码执行 `setup --interactive --replace`；该命令先归档不兼容配对文件。
+- `configuration_state_incompatible`：修正当前摄像头设置；账户替换流程会保留这类错误配置。
+- `important_state_incompatible`：检查录像布局、文件类型与访问权限，保留现有录像后由管理员处理。
+- 动作未确认或命令日志错误：核对设备状态和剩余磁盘空间，保留 `.commands.json`。修复存储后重新启动会继续上报已有结果。
 
-手工 RTSP 配置示例：
+摄像头修改使用 `camera apply/remove`，实例修改使用 `setup/unpair`；这些入口验证身份并原子保存。直接改写身份、格式或删除执行日志会破坏配对或动作确认依据。
 
-```json
-{
-  "name": "东门",
-  "location": "一层",
-  "enabled": true,
-  "storage_mode": "server",
-  "adapter": {
-    "kind": "rtsp",
-    "streams": [
-      {"profile": "main", "url": "rtsp://camera.example/main"},
-      {"profile": "sub", "url": "rtsp://camera.example/sub"}
-    ],
-    "username": "operator",
-    "password": "REDACTED"
-  }
-}
-```
+## 运行数据
 
-`id` 可省略；`camera apply` 会强制使用 `--instance-id`，避免一份配置越权绑定到另一实例。ONVIF 配置使用
-`kind: "onvif"`、`device_service_url`，并可提供 `username`、`password`、`main_profile_token` 和
-`sub_profile_token`。
-
-## 3. 运行与核验
-
-```sh
-sudo xcoc status
-sudo xcoc camera list
-systemctl status xcoc.service
-```
-
-Windows 用 `Get-Service XcocClient` 查看服务状态。`status` 只输出安装 ID、服务端、实例 ID、名称和是否已配置，不输出 token 或摄像头凭据。后台运行每两秒重新读取
-配置：`camera apply` 或 `camera remove` 后无需重启，受影响的媒体工作进程会停止并按新配置重建。
-
-应分别核验：
-
-1. 客户端能探测主码流，服务端能看到最新快照；
-2. 管理页可播放实时画面；
-3. `storage_mode: "client"` 时本地 15 分钟 MP4 分段持续生成；
-4. `storage_mode: "server"` 时服务端录像索引持续出现。
-
-服务端暂时离线不应阻断本地录像；发布授权和快照会在连接恢复后重新获取。生产构建只接受可信 HTTPS 服务端，
-服务端返回的发布地址必须是证书受系统信任且主机名匹配的 `rtsps://` URL。
-
-## 4. 常见故障
-
-| 现象 | 核对项 |
-|---|---|
-| Setup 在请求前失败 | `xcoc media-worker --check`；源码构建检查固定原生库与链接依赖；本地摄像头另检查服务 PATH 中的 `ffmpeg -version` |
-| `pairing_authorization_rejected` | 实例授权码是否有效、是否已配对、是否应先在服务端更换授权码 |
-| `pairing_protocol_unsupported` | 客户端与服务端是否都支持 `xcos-edge-v1` |
-| ONVIF 发现为空 | 客户端是否与摄像头同一可达网段，UDP 3702 组播是否被网络策略拦截 |
-| 配置已保存但画面离线 | 摄像头 URL/凭据、内置媒体探测、服务端 RTSPS 证书和客户端到发布端口的连通性 |
-| 修改后服务端尚未更新 | `run` 是否仍在运行；等待下一次快照并检查该实例错误输出 |
-| `pairing_state_incompatible` | 不兼容的账户文件会保留；创建新授权码后运行 `setup --interactive --replace` 归档该文件并重新配对 |
-| `configuration_state_incompatible` | 当前摄像头配置不合法；文件已保留，不会被账户恢复流程清除 |
-| `important_state_incompatible` | 本地录像布局、文件类型或可读性不兼容；录像已保留，禁止直接覆盖或自动迁移 |
-
-服务端删除旧实例并创建新实例时，先运行 `sudo xcoc unpair OLD_INSTANCE_UUID` 移除本地旧配对，再使用新授权码执行 `setup`。`unpair` 只移除指定实例的本地配对和该实例摄像头配置，保留其他实例；最后一个实例移除后配置文件会被删除。它不撤销服务端授权，也不删除已保存的录影片段。摄像头配置单独用 `camera remove INSTANCE_UUID` 删除；客户端会向支持空快照的服务端清除该实例的摄像头。
-
-不要通过手改本地 JSON 的 `format`、`installation_id` 或实例 ID 修复状态；运行时检测到安装身份变化会要求重启，
-错误绑定可能使实例无法重新配对。修改摄像头应使用 `camera apply/remove` 的原子写入路径。
-
-
-动作显示“未确认”时，先检查设备实际状态，再核对 command_results 的 outcome/error_code。不要将 unknown 当作失败重复同一动作。客户端命令日志已将意图持久化，崩溃后不重放可能已执行的 PTZ；配置旁的 `.commands.json` 是恢复证据，不能删除或覆盖。存储或日志写入失败会使服务退出，修复权限、空间后重新启动，原有记录继续回报。容量为零时仍回报状态和已有结果。
+默认配置和录像目录见[平台指南](platform-setup.md#部署前准备)。配置、录像与命令日志只向管理员及运行账户开放。
+日志使用 UTC、实例 UUID 和稳定错误码；反馈问题时提供版本、平台、症状与脱敏日志，保留 token、RTSP 地址、密码及私有文件。
+媒体进程的凭据传递与配置权限细节见[状态参考](runtime-reference.md)和[媒体运行时](media-worker.md)。
 
 ## Windows 后台诊断
 
 SCM 在私有状态校验后创建 `%ProgramData%/XcocClient/logs`，使用共享类型化的 sink 写入 `xcoc.jsonl`。最多保留活动文件和四份归档，每份 8 MiB，总上限 40 MiB。服务账户首次创建此目录；管理员查询不会先替服务建立日志目录。ACL 拒绝普通用户，已有不安全对象不修复。服务启动失败且日志输出器尚不可用时，可同时查看 Windows SCM 的服务退出代码。
 
-0.5.3 的公共查询按日志输出器的实际物理布局读取：活动文件为 `xcoc.jsonl`，四份归档为 `xcoc.jsonl.1` 至 `.4`。此前查询错误使用 `.01` 等归档名称；更新后直接读取现有文件，日志数据无需迁移或手动重命名。Windows 服务仍使用 LocalSystem，目录保持 SYSTEM 所有且只授予 SYSTEM/Administrators 访问；不改变摄像头适配或配置、命令事实的身份。
+日志按活动文件 `xcoc.jsonl` 和归档 `xcoc.jsonl.1` 至 `.4` 查询。Windows 服务使用 LocalSystem；目录仅授予 SYSTEM 和 Administrators 访问。
 
 ```powershell
 xcoc logs --tail 100 --format json

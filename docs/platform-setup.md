@@ -1,10 +1,10 @@
 # xcoc 分平台部署与维护
 
-适用于 `xcoc 1.1.0`。按平台完成安装、配对、摄像头配置、验收，再按需要重新配对、管理服务或卸载。摄像头 JSON 与协议说明见[配置指南](configuration.md)，录像与故障边界见[运维文档](operations.md)。
+适用于当前 `xcoc 1.1.0` 源码。公开 v1.0.0 仅有桌面资产；1.1.0 尚未发布时，先按[桌面构建](media-worker.md)或[移动构建](mobile.md)准备对应程序。下列归档和 MSI 命令在取得同版产物后使用。按平台完成安装、配对、摄像头配置、验收，再按需要重新配对、管理服务或卸载。摄像头 JSON 与协议说明见[配置指南](configuration.md)，录像与故障边界见[运维文档](operations.md)。
 
 ## 部署前准备
 
-1. 在 [客户端 Releases](https://github.com/isarmg/xcoc/releases) 下载目标版本的本机平台资产和 `SHA256SUMS`。Linux/macOS 资产名不包含版本号，必须确认所在 Release 的版本。Windows 正式安装用 MSI，ZIP 仅用于手工运行。
+1. 先核对[客户端 Releases](https://github.com/isarmg/xcoc/releases)上的实际版本和资产。对应版本发布后，下载本机平台资产和 `SHA256SUMS`；使用源码时，先完成同版构建。Linux/macOS 资产名不包含版本号，必须确认所在 Release 的版本。Windows 正式安装用 MSI，ZIP 仅用于手工运行。
 2. 请服务端管理员创建摄像头实例，提供 HTTPS 根地址、实例授权码。桌面一次安装可管理多个实例，每个实例对应一台摄像机；移动端只管理一份配对和一个主码流。
 3. 桌面使用内置媒体工作进程，以 `xcoc media-worker --check` 检查链接的 FFmpeg 库。网络摄像头不需要 `ffmpeg`/`ffprobe` 命令；内置/USB 摄像头另需带对应采集后端和 `libx264` 的 `ffmpeg`，且实际采集账户的 PATH 必须能找到它。见[媒体运行时](media-worker.md)与[兼容说明](camera-support.md)。手机使用系统摄像头/编码器，无需安装 FFmpeg。
 4. 服务端 HTTPS 与发布用 RTSPS 证书都必须可信且名称匹配；摄像头 RTSP 可在本地网络内使用。授权码在桌面交互提示中明文回显，摄像头密码隐藏输入。
@@ -17,7 +17,7 @@
 | macOS Apple Silicon | tar.gz，手工部署 | 无随包安装器；默认配置 `/Library/Application Support/XcocClient/config.json` | `/Library/Application Support/XcocClient/recordings` |
 | Android / iOS | 原生应用，按移动指南构建/签名安装 | 应用私有存储及系统安全存储 | 当前移动端在服务端录像 |
 
-`status` 和 `camera list` 是本机只读视图；服务运行和本机已配对不能代替服务端的画面/录像验收。xcoc 没有 xsoc/xscc 的 `pair recover`、`doctor` 或通用 `service start/stop` 子命令，不应复制其他产品的命令。
+`status` 和 `camera list` 是本机只读视图；服务运行和本机已配对不能代替服务端的画面/录像验收。服务启停使用本页各平台的 systemd、SCM 或 launchd 命令。
 
 ## Linux x86_64（systemd）
 
@@ -123,7 +123,7 @@ sudo journalctl -u xcoc.service -f
 
 发现失败核对网段和 UDP 3702；有摄像头配置却无画面时，核对本机码流验证、摄像头凭据、RTSPS 证书及发布端口。日志中不公开原始 RTSP URL、token 或配置文件。
 
-### 6. 升级与卸载
+### 6. 替换程序与卸载
 
 升级重新解压已校验的新版本并运行安装脚本。脚本备份旧程序/unit，失败时尝试回滚；本次自启选择会生效，升级后再次核对。没有 DEB/RPM，不使用 `apt remove xcoc` 卸载。
 
@@ -239,7 +239,7 @@ sc.exe query XcocClient
 
 持久日志位于 `%ProgramData%\XcocClient\logs`，普通用户不可读。没有日志时同时查看 System/SCM 事件和安装日志。配置含 token，不用 `Get-Content config.json` 收集工单。
 
-### 6. 升级、修复和卸载
+### 6. 修复安装和卸载
 
 本章后续维护若在新 PowerShell 会话中进行，先重新执行第 1 步读取注册表的 `$installRoot` / `$client` 两行。涉及修复或卸载时，再用 `$msi = (Resolve-Path .\xcoc-1.1.0-windows-x64.msi).Path` 指向与已安装产品相匹配的 MSI；文件在其他目录时用其实际完整路径。不要沿用指向另一版本包的变量。
 
@@ -367,7 +367,7 @@ sudo launchctl print-disabled system
 
 禁用自启后如要再次 `bootstrap`，先 `enable`；完全暂停需先 `bootout` 再 `disable`。
 
-### 4. 诊断、升级与卸载
+### 4. 诊断和卸载
 
 ```sh
 # 核对内置媒体库；仅内置/USB 摄像头额外检查 plist PATH 中的采集命令。
