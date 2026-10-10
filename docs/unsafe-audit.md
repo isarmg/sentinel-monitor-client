@@ -56,3 +56,8 @@ CLI，媒体脚本分别校验 Linux x86_64 与 macOS ARM64 的固定 companion�
 
 本地重新验证记录见 [摄像头验证记录](camera-validation.md)；正式发布以 1.0.0 最终提交的各平台 CI、
 实际 MSI/SCM 生命周期及发行附件回下载结果为准，不把模拟设备结果视为真实摄像头认证。
+
+
+## 2026-10-10 xcsc 1.0.1 输入更新
+
+当前依赖已更新为官方 `xcsc =1.0.1`，固定 Git 修订 `d3e9b8db84e4ead70ec0bf8a596dbad697f7db24`，并同步产品能力清单和 `Cargo.lock`。上文关于 xcsc 1.0.0 的来源与验证描述保留为当时记录，不代表当前输入。新修订的客户端来源校验和 `cargo metadata --locked --all-features` 已通过；这两项不替代本产品最终源码的原生平台、实体设备或业务路径验收。
