@@ -13,7 +13,55 @@ env:
   RUSTUP_TOOLCHAIN: 1.99.0
 
 jobs:
+  # Keep PR workflows and existing check names present; filter jobs, not triggers.
+  scope:
+    name: Change scope
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      run_full: ${{ steps.changes.outputs.run_full }}
+    steps:
+      - name: Check out the comparison history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select documentation or full validation
+        id: changes
+        shell: bash
+        env:
+          PUSH_BASE: ${{ github.event.before }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          run_full=true
+          base=""
+          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
+            base="$PR_BASE"
+          elif [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF_TYPE" != tag ]]; then
+            base="$PUSH_BASE"
+          fi
+          # Dispatches, release tags, new branches and unavailable history stay full.
+          if [[ "$base" =~ ^[0-9a-f]{40}$ ]] && git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            git diff --name-only --no-renames -z "$base" HEAD > "$RUNNER_TEMP/changed-paths"
+            run_full=false
+            while IFS= read -r -d '' path; do
+              case "$path" in
+                # Release/package inputs and safety audits retain full validation.
+                docs/releases/* | docs/unsafe*.md | README.md) run_full=true; break ;;
+                README.md | docs/*.md) ;;
+                *) run_full=true; break ;;
+              esac
+            done < "$RUNNER_TEMP/changed-paths"
+          fi
+          echo "run_full=$run_full" >> "$GITHUB_OUTPUT"
+          echo "Full validation: $run_full"
+
   quality:
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.outputs.run_full != 'false' }}
     name: Format, lint, and test
     permissions:
       contents: read
@@ -53,6 +101,8 @@ jobs:
         run: XCOC_TEST_MEDIAMTX="$RUNNER_TEMP/xcoc-media/mediamtx" bash scripts/test-media.sh
 
   android:
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.outputs.run_full != 'false' }}
     name: Android native camera
     permissions:
       contents: read
@@ -84,6 +134,8 @@ jobs:
       - run: gradle -p clients/android testDebugUnitTest assembleDebug lintDebug
 
   ios:
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.outputs.run_full != 'false' }}
     name: iOS native camera
     permissions:
       contents: read
@@ -105,6 +157,8 @@ jobs:
           xcodebuild -project clients/ios/XcocCamera.xcodeproj -scheme XcocCamera -sdk iphonesimulator -destination "id=$simulator_id" CODE_SIGNING_ALLOWED=NO -derivedDataPath clients/ios/DerivedData test
 
   native-build:
+    needs: scope
+    if: ${{ !cancelled() }}
     name: Native build (${{ matrix.name }})
     permissions:
       contents: read
@@ -121,24 +175,32 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
+      - name: Documentation-only change
+        if: ${{ needs.scope.outputs.run_full == 'false' }}
+        shell: bash
+        run: echo "Documentation-only change; heavy build steps are not needed."
       - name: Check out source without credentials
+        if: ${{ needs.scope.outputs.run_full != 'false' }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Install exact Rust toolchain
+        if: ${{ needs.scope.outputs.run_full != 'false' }}
         run: rustup toolchain install 1.99.0 --profile minimal
       - name: Verify locked client support boundary
+        if: ${{ needs.scope.outputs.run_full != 'false' }}
         run: python scripts/check-xcsc-source.py
       - name: Build native client
+        if: ${{ needs.scope.outputs.run_full != 'false' }}
         run: cargo build --locked --release
       - name: Test macOS runtime and protected storage
-        if: runner.os == 'macOS'
+        if: ${{ needs.scope.outputs.run_full != 'false' && (runner.os == 'macOS') }}
         run: cargo test --locked --workspace --all-targets --all-features
       - name: Test Windows private ACLs
-        if: runner.os == 'Windows'
+        if: ${{ needs.scope.outputs.run_full != 'false' && (runner.os == 'Windows') }}
         run: cargo test --locked --release --bin xcoc windows_
       - name: Build Windows MSI
-        if: runner.os == 'Windows'
+        if: ${{ needs.scope.outputs.run_full != 'false' && (runner.os == 'Windows') }}
         shell: pwsh
         run: |
           $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages[0].version
@@ -147,7 +209,7 @@ jobs:
             -Version $version `
             -Output "$env:RUNNER_TEMP\xcoc-msi"
       - name: Verify custom path, service startup, and state retention
-        if: runner.os == 'Windows'
+        if: ${{ needs.scope.outputs.run_full != 'false' && (runner.os == 'Windows') }}
         shell: pwsh
         run: |
           $msi = @(Get-ChildItem "$env:RUNNER_TEMP\xcoc-msi" -Filter '*.msi' -File)
