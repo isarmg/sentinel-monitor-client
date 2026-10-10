@@ -1,5 +1,5 @@
 name: Package iOS Release
-description: Build and verify unsigned device archives and arm64 Simulator apps.
+description: Build and verify unsigned device IPAs, archives and arm64 Simulator apps.
 runs:
   using: composite
   steps:
@@ -39,6 +39,7 @@ runs:
         name: xcoc-ios-arm64
         path: |
           dist/xcoc-ios-arm64-unsigned.xcarchive.zip
+          dist/xcoc-ios-arm64-unsigned.ipa
           dist/xcoc-ios-simulator-arm64.app.zip
           dist/xcoc-ios-release.json
         if-no-files-found: error

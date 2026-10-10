@@ -1,6 +1,8 @@
 """Release packaging guards, runnable without Android SDK or Xcode."""
 import importlib.util
+import json
 import plistlib
+import stat
 import struct
 import tempfile
 import unittest
@@ -38,7 +40,7 @@ class ReleaseTests(unittest.TestCase):
 
     def manifest(self, version="1.0.0", code="1000000", app_id=release.APP_ID):
         return (f"package: name='{app_id}' versionCode='{code}' versionName='{version}'\n"
-                "sdkVersion:'26'\ntargetSdkVersion:'36'\n")
+                "minSdkVersion:'26'\ntargetSdkVersion:'36'\n")
 
     def ios_app(self, platform="iPhoneOS"):
         app = self.root / "XcocCamera.app"
@@ -108,8 +110,33 @@ class ReleaseTests(unittest.TestCase):
         release.check_android_manifest(self.manifest(), "1.0.0", 1000000)
         for text in (self.manifest(version="2.0.0"), self.manifest(code="2"),
                      self.manifest(app_id="wrong.app"), self.manifest() + "application-debuggable\n",
-                     self.manifest().replace("sdkVersion:'26'", "sdkVersion:'25'")):
+                     self.manifest().replace("minSdkVersion:'26'", "minSdkVersion:'25'")):
             with self.subTest(text=text), self.assertRaises(ValueError):
+                release.check_android_manifest(text, "1.0.0", 1000000)
+
+    def test_current_official_aapt2_badging_fixture(self):
+        # Captured with Google's build-tools 36.0.0 aapt2 2.20-13193326,
+        # linking a controlled APK with --min-sdk-version 26 --target-sdk-version 36.
+        # dump xmltree independently reported numeric min/target attributes 26/36.
+        fixture = Path(__file__).parent / "fixtures/aapt2-36.badging.txt"
+        release.check_android_manifest(fixture.read_text(), "1.1.0", 1001000)
+
+    def test_android_sdk_fields_are_strict_and_unambiguous(self):
+        valid = self.manifest()
+        release.check_android_manifest(valid.replace("Version:'", "Version:  '"), "1.0.0", 1000000)
+        for text in (
+            valid.replace("minSdkVersion:'26'", ""),
+            valid.replace("targetSdkVersion:'36'", ""),
+            valid.replace("minSdkVersion:'26'", "minSdkVersion:'260'"),
+            valid.replace("targetSdkVersion:'36'", "targetSdkVersion:'35'"),
+            valid.replace("minSdkVersion:'26'", "minSdkVersion:'Baklava'"),
+            valid.replace("minSdkVersion:'26'", "sdkVersion:'26'"),
+            valid + "minSdkVersion:'26'\n",
+            valid + "targetSdkVersion:'35'\n",
+            valid + "minSdkVersion:'25' unexpected-trailing-data\n",
+            valid.replace("minSdkVersion:'26'", "application-label:'minSdkVersion:26'"),
+        ):
+            with self.subTest(text=text), self.assertRaisesRegex(ValueError, "expected exactly 26/36"):
                 release.check_android_manifest(text, "1.0.0", 1000000)
 
     def test_ios_unsigned_device_and_simulator(self):
@@ -139,6 +166,95 @@ class ReleaseTests(unittest.TestCase):
         (app / "XcocCamera").unlink()
         with self.assertRaisesRegex(ValueError, "executable"):
             release.check_ios_app(app, "1.0.0", "iPhoneOS")
+
+    def device_app_for_ipa(self, platform="iPhoneOS"):
+        app = self.ios_app(platform)
+        header = bytearray(64)
+        header[:4] = b"\xcf\xfa\xed\xfe"
+        struct.pack_into("<I", header, 4, 0x0100000C)
+        struct.pack_into("<I", header, 12, 2)
+        (app / "XcocCamera").write_bytes(header)
+        (app / "XcocCamera").chmod(0o755)
+        return app
+
+    def test_ipa_standard_payload_preserves_binary_resources_and_links(self):
+        app = self.device_app_for_ipa()
+        (app / "照片.png").write_bytes(b"image fixture")
+        (app / "resource-link").symlink_to("照片.png")
+        output = self.root / "dist/xcoc-ios-arm64-unsigned.ipa"
+        release.package_ios_ipa(app, output, "1.0.0")
+        release.check_ios_ipa(output, "1.0.0")
+        with zipfile.ZipFile(output) as archive:
+            self.assertTrue(all(name.startswith("Payload/XcocCamera.app/") for name in archive.namelist()))
+            self.assertEqual(archive.read("Payload/XcocCamera.app/XcocCamera"), (app / "XcocCamera").read_bytes())
+            self.assertEqual(archive.read("Payload/XcocCamera.app/照片.png"), b"image fixture")
+            binary = archive.getinfo("Payload/XcocCamera.app/XcocCamera")
+            self.assertEqual((binary.external_attr >> 16) & 0o777, 0o755)
+            link = archive.getinfo("Payload/XcocCamera.app/resource-link")
+            self.assertTrue(stat.S_ISLNK(link.external_attr >> 16))
+            self.assertEqual(archive.read(link).decode(), "照片.png")
+
+    def test_ipa_simulator_rejected(self):
+        output = self.root / "app.ipa"
+        with self.assertRaisesRegex(ValueError, "platform"):
+            release.package_ios_ipa(self.device_app_for_ipa("iPhoneSimulator"), output, "1.0.0")
+        self.assertFalse(output.exists())
+
+    def test_ipa_requires_arm64_executable_permissions(self):
+        app = self.device_app_for_ipa()
+        output = self.root / "app.ipa"
+        (app / "XcocCamera").chmod(0o644)
+        with self.assertRaisesRegex(ValueError, "executable permissions"):
+            release.package_ios_ipa(app, output, "1.0.0")
+        (app / "XcocCamera").chmod(0o755)
+        (app / "XcocCamera").write_bytes(b"not a Mach-O executable")
+        with self.assertRaisesRegex(ValueError, "Mach-O"):
+            release.package_ios_ipa(app, output, "1.0.0")
+        self.assertFalse(output.exists())
+
+    def test_ipa_nested_signature_and_external_links_rejected(self):
+        app = self.device_app_for_ipa()
+        output = self.root / "app.ipa"
+        signature = app / "Frameworks/example.framework/_CodeSignature"
+        signature.mkdir(parents=True)
+        with self.assertRaisesRegex(ValueError, "unsigned IPA"):
+            release.package_ios_ipa(app, output, "1.0.0")
+        signature.rmdir()
+        (app / "outside").symlink_to(self.root)
+        with self.assertRaisesRegex(ValueError, "outside"):
+            release.package_ios_ipa(app, output, "1.0.0")
+        self.assertFalse(output.exists())
+
+    def test_ipa_wrong_version_preserves_existing_output(self):
+        app = self.device_app_for_ipa()
+        output = self.root / "app.ipa"
+        output.write_bytes(b"previous release")
+        with self.assertRaisesRegex(ValueError, "version"):
+            release.package_ios_ipa(app, output, "9.0.0")
+        self.assertEqual(output.read_bytes(), b"previous release")
+
+    def test_ipa_validator_rejects_incomplete_or_unexpected_payload(self):
+        output = self.root / "bad.ipa"
+        with zipfile.ZipFile(output, "w") as archive:
+            archive.writestr("XcocCamera.app/Info.plist", b"wrong path")
+        with self.assertRaisesRegex(ValueError, "only Payload"):
+            release.check_ios_ipa(output, "1.0.0")
+        with zipfile.ZipFile(output, "w") as archive:
+            archive.writestr("Payload/XcocCamera.app/resource", b"missing executable")
+        with self.assertRaisesRegex(ValueError, "incomplete"):
+            release.check_ios_ipa(output, "1.0.0")
+
+    def test_ipa_metadata_includes_checksum_and_unsigned_warning(self):
+        app = self.device_app_for_ipa()
+        output = self.root / "dist/xcoc-ios-arm64-unsigned.ipa"
+        release.package_ios_ipa(app, output, "1.0.0")
+        with patch.object(release.subprocess, "check_output", return_value="a" * 40):
+            release.write_manifest(output.parent, "ios", "1.0.0", [output])
+        metadata = json.loads((output.parent / "xcoc-ios-release.json").read_text())
+        self.assertFalse(metadata["signed"])
+        self.assertIn("require Apple signing and provisioning", metadata["distribution"])
+        self.assertEqual(metadata["artifacts"][output.name],
+                         {"sha256": release.checksum(output), "bytes": output.stat().st_size})
 
     def test_checksum_records_exact_bytes(self):
         path = self.root / "artifact.apk"

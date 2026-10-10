@@ -2,7 +2,7 @@
 
 首次部署或日常维护请先阅读[分平台全流程指南](platform-setup.md)：按本机平台完成安装、配对、重新配对、服务/后台任务查看与启停、诊断和卸载，命令旁均说明用途。本文详细说明配置字段和业务操作。
 
-本文适用于 `xcoc` `1.0.0`，按实际 CLI 说明实例配对、RTSP/ONVIF 摄像头配置、更新和验证。
+本文适用于 `xcoc` `1.1.0`，按实际 CLI 说明实例配对、RTSP/ONVIF 摄像头配置、更新和验证。
 
 品牌码流预设、Windows/macOS/Linux 内置与 USB 摄像头见[摄像头兼容与协议转换](camera-support.md)；
 Android/iOS 采集应用见[移动端指南](mobile.md)。这些输入统一转换成服务端已支持的 RTSP/RTSPS，

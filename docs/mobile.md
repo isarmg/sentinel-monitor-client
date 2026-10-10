@@ -90,6 +90,7 @@ XCOC_TEST_MEDIAMTX=/absolute/path/to/mediamtx bash scripts/test-media.sh
 
 - `xcoc-android-arm64-v8a-unsigned.apk`：Android 8.0/API 26+、arm64-v8a 的未签名 Release APK。
 - `xcoc-android-arm64-v8a-unsigned.aab`：相同应用的未签名 Android App Bundle。
+- `xcoc-ios-arm64-unsigned.ipa`：从实机归档生成的未签名应用包，包含 `Payload/XcocCamera.app`；需签名后才能装到 iPhone。
 - `xcoc-ios-arm64-unsigned.xcarchive.zip`：iOS 16+、arm64 的未签名实机 Xcode archive。
 - `xcoc-ios-simulator-arm64.app.zip`：arm64 iOS Simulator 的 Release app；只在模拟器使用。
 - `xcoc-android-release.json`、`xcoc-ios-release.json`：应用标识、版本、实际源码提交、签名状态、
@@ -106,9 +107,10 @@ Android 的 APK 必须使用所有者稳定保管的 release key 签名后才能
 需要签名后交由适用的分发流程生成 APK。不要用临时/debug key 冒充正式发行签名；更换签名会影响
 后续更新能力。当前 CI 不创建或读取签名密钥，也不把 Debug APK 作为 Release 资产。
 
-iOS 的 `.xcarchive` 不是 IPA，不能直接装到 iPhone。所有者需要在 Xcode 中使用自己的 Apple
-签名身份、开发团队和适用的 provisioning profile，按实际分发方式构建/签名并导出。当前 workflow
-不导出或伪造“可安装”的未签名 IPA，不创建 Apple 证书，不接受开发者协议，不上传 TestFlight/App Store。
+iOS 同时提供 `.xcarchive` 和由该归档中实机 app 打包的 `-unsigned.ipa`。未签名 IPA 也不能直接
+装到 iPhone；它只提供标准 `Payload/XcocCamera.app` 布局，不代表已完成签名、provisioning 或
+App Store 验证。所有者需要使用自己的 Apple 签名身份、开发团队和适用的 provisioning profile，
+按实际分发方式签名/导出。当前 workflow 不创建 Apple 证书，不接受开发者协议，不上传 TestFlight/App Store。
 模拟器 app 可解压后用 `xcrun simctl install booted XcocCamera.app` 安装到已启动的 arm64 模拟器；
 模拟器测试不证明真实摄像头采集或实机分发可用。
 
@@ -139,7 +141,9 @@ python3 packaging/mobile/release.py ios
 ```
 
 产物输出在 `dist/`。验证脚本拒绝版本漂移、Debug APK、错误 app ID/目标平台、缺少或非 arm64 的
-原生库，以及混入签名的“unsigned”产物；元数据中的源码 revision 来自当前 checkout。CI 会另用独立
+原生库，以及混入签名的“unsigned”产物。IPA 另核对 Payload 布局、实机 app 标识/版本、arm64 Mach-O
+可执行文件及执行权限，保留应用内容和包内相对符号链接，拒绝链接到包外的文件。IPA 与其他产物
+一起写入版本元数据和 SHA-256 清单；元数据中的源码 revision 来自当前 checkout。CI 会另用独立
 DerivedData 在 Release 下启用 testability 跑 Swift 测试，最终模拟器产物重新以 testability 关闭构建。
 版本升级时同时更新 Cargo、移动 FFI、Android versionName/versionCode 和 iOS MARKETING_VERSION/
 CURRENT_PROJECT_VERSION。Android versionCode 使用 `major*1000000 + minor*1000 + patch`；iOS

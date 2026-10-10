@@ -1,6 +1,6 @@
 # xcoc 分平台部署与维护
 
-适用于 `xcoc 1.0.0`。按平台完成安装、配对、摄像头配置、验收，再按需要重新配对、管理服务或卸载。摄像头 JSON 与协议说明见[配置指南](configuration.md)，录像与故障边界见[运维文档](operations.md)。
+适用于 `xcoc 1.1.0`。按平台完成安装、配对、摄像头配置、验收，再按需要重新配对、管理服务或卸载。摄像头 JSON 与协议说明见[配置指南](configuration.md)，录像与故障边界见[运维文档](operations.md)。
 
 ## 部署前准备
 
@@ -33,9 +33,9 @@ uname -m
 # 计算压缩包哈希，人工对比同版 SHA256SUMS 中该文件的行。
 sha256sum ./xcoc-linux-x86_64.tar.gz
 # 创建本次解压目录，保留发行包中的 target/release 与 packaging 相对布局。
-mkdir xcoc-1.0.0-linux
-tar -xzf ./xcoc-linux-x86_64.tar.gz -C xcoc-1.0.0-linux
-cd xcoc-1.0.0-linux
+mkdir xcoc-1.1.0-linux
+tar -xzf ./xcoc-linux-x86_64.tar.gz -C xcoc-1.1.0-linux
+cd xcoc-1.1.0-linux
 # 安装程序到 /usr/local/bin 和 unit 到 /etc/systemd/system，登记并立即启动服务。
 sudo sh packaging/linux/install.sh
 # 确认 Client 版本、内置媒体运行时及当前服务状态。
@@ -154,9 +154,9 @@ systemctl show xcoc.service --property=LoadState,ActiveState
 
 ```powershell
 # 校验 MSI，与同版 SHA256SUMS 对比。
-Get-FileHash .\xcoc-1.0.0-windows-x64.msi -Algorithm SHA256
+Get-FileHash .\xcoc-1.1.0-windows-x64.msi -Algorithm SHA256
 # 安装程序和 XcocClient 服务，等待向导退出并写入安装日志。
-$msi = (Resolve-Path .\xcoc-1.0.0-windows-x64.msi).Path
+$msi = (Resolve-Path .\xcoc-1.1.0-windows-x64.msi).Path
 $install = Start-Process msiexec.exe -ArgumentList "/i `"$msi`" /norestart /l*v `"$env:TEMP\xcoc-install.log`"" -Wait -PassThru
 # 0 成功；3010 表示成功但需重启；其他码先查看日志。
 $install.ExitCode
@@ -241,7 +241,7 @@ sc.exe query XcocClient
 
 ### 6. 升级、修复和卸载
 
-本章后续维护若在新 PowerShell 会话中进行，先重新执行第 1 步读取注册表的 `$installRoot` / `$client` 两行。涉及修复或卸载时，再用 `$msi = (Resolve-Path .\xcoc-1.0.0-windows-x64.msi).Path` 指向与已安装产品相匹配的 MSI；文件在其他目录时用其实际完整路径。不要沿用指向另一版本包的变量。
+本章后续维护若在新 PowerShell 会话中进行，先重新执行第 1 步读取注册表的 `$installRoot` / `$client` 两行。涉及修复或卸载时，再用 `$msi = (Resolve-Path .\xcoc-1.1.0-windows-x64.msi).Path` 指向与已安装产品相匹配的 MSI；文件在其他目录时用其实际完整路径。不要沿用指向另一版本包的变量。
 
 校验新版 MSI 后重复安装。升级可能恢复开机自动启动，完成后核对 `sc.exe qc XcocClient`。同版修复和普通卸载分别如下，按需执行：
 
@@ -271,11 +271,11 @@ Get-Service -Name XcocClient -ErrorAction SilentlyContinue
 uname -m
 # 对比同版 SHA256SUMS 中的归档哈希，再解压到独立目录。
 shasum -a 256 ./xcoc-macos-arm64.tar.gz
-mkdir xcoc-1.0.0-macos
-tar -xzf ./xcoc-macos-arm64.tar.gz -C xcoc-1.0.0-macos
+mkdir xcoc-1.1.0-macos
+tar -xzf ./xcoc-macos-arm64.tar.gz -C xcoc-1.1.0-macos
 # 创建程序目录，将归档中的实际二进制安装到固定路径。
 sudo install -d -m 0755 /usr/local/bin
-sudo install -m 0755 xcoc-1.0.0-macos/target/release/xcoc /usr/local/bin/xcoc
+sudo install -m 0755 xcoc-1.1.0-macos/target/release/xcoc /usr/local/bin/xcoc
 # 核对安装版本，完成 Server 配对和摄像头探测。
 /usr/local/bin/xcoc --version
 /usr/local/bin/xcoc media-worker --check

@@ -4,7 +4,7 @@
 
 ## 1. 前置条件与状态文件
 
-当前版本为 `1.0.0`。先用 `xcoc media-worker --check` 检查内置媒体运行时；网络摄像头无需 `ffmpeg` 或 `ffprobe` 命令，内置/USB 摄像头另需后台服务能找到支持该设备后端与 `libx264` 的 `ffmpeg`。构建/库依赖见[桌面媒体运行时](media-worker.md)。默认配置路径为：
+当前版本为 `1.1.0`。先用 `xcoc media-worker --check` 检查内置媒体运行时；网络摄像头无需 `ffmpeg` 或 `ffprobe` 命令，内置/USB 摄像头另需后台服务能找到支持该设备后端与 `libx264` 的 `ffmpeg`。构建/库依赖见[桌面媒体运行时](media-worker.md)。默认配置路径为：
 
 - Linux：`/etc/isarmg/xcoc/config.json`
 - macOS：`/Library/Application Support/XcocClient/config.json`

@@ -1,81 +1,57 @@
 # xcoc
 
-`xcoc` `1.0.0` 是 xcos 的摄像头边缘客户端。它在摄像头所在网络中保存 RTSP/ONVIF 凭据、探测视频流、向服务端发布主/子码流，并按配置在客户端或服务端侧录像。
+## 项目简要介绍
 
-`1.0.0` 提供桌面 CLI、移动端摄像头采集和配对服务，统一使用公共基础库 1.0.0、摄像头 edge v1 和 ABI v1。安装、重新配对及运维步骤见平台部署文档。
+xcos 的摄像头边缘客户端。在摄像头所在网络保存设备凭据、采集或探测视频，并向服务端发布码流。
 
-客户端提供 RTSP/ONVIF、海康/大华/宇视/Axis/Reolink/Tapo 码流预设，以及 Linux/Windows/macOS
-内置与 USB 摄像头采集。Android/iOS 原生应用支持前后摄像头，将原生 H.264 转换成服务端已支持的
-RTSP/RTSPS 发布输入；所有适配与转换均在客户端，服务端协议保持现有 edge v1。
-桌面媒体探测、发布与录像通过 `xcoc` 内置工作进程调用 FFmpeg 库，不依赖 `ffprobe` 命令。
-内置/USB 摄像头另需提供带对应采集后端和 `libx264` 的 `ffmpeg` 命令；手机应用使用系统采集和编码，无需 FFmpeg。
-构建与运行依赖见[桌面媒体运行时](docs/media-worker.md)，接入边界见[摄像头兼容与协议转换](docs/camera-support.md)和[移动端指南](docs/mobile.md)。
+## 项目功能
 
-Linux Release 压缩包解压后运行 `sudo ./packaging/linux/install.sh`：安装全部功能并立即启动 systemd 服务。唯一提示是是否开机自启，直接回车默认 Yes；即使选择 No，本次安装仍会立即启动服务。Windows MSI 安装全部功能并立即启动 `XcocClient` 系统服务；运行 `xcoc setup --interactive` 时，开机自启提示直接回车也默认 Yes。非交互配对默认启用开机自启。安装和卸载都会保留现有配对配置与录像。
+- RTSP/ONVIF 摄像头发现、品牌码流预设、主/子码流发布
+- 电脑内置/USB 摄像头及手机前后摄像头采集
+- 实例配对、状态上报、云台控制、客户端或服务端录像
+- 桌面内置媒体工作进程；网络摄像头无需外部 `ffprobe`
 
-## 配置概览
+## 适用平台
 
-先检查内置媒体运行时，再通过受保护的 stdin 完成实例配对：
+- 桌面：Linux x86_64、Windows x64、macOS Apple Silicon
+- 移动：Android 8.0/API 26+ arm64、iOS 16+ arm64；iOS 切到后台会停止采集
+- 内置/USB 摄像头额外需要带对应采集后端和 `libx264` 的 `ffmpeg`；手机使用系统采集和编码
+
+## 如何快速部署
+
+在 [下载页](https://github.com/isarmg/xcoc/releases) 选择平台和版本并核对同版 `SHA256SUMS`。当前 1.1.0 的内置媒体与移动端功能需使用对应版本产物；只有旧版资产时，先按下节编译，不能套用新版命令。
+
+Linux 在解压目录或完成编译的源码根目录执行：
 
 ```sh
-xcoc media-worker --check
-# 仅内置/USB 摄像头需要外部采集工具：
-ffmpeg -version
-sudo install -m 0600 /dev/null /root/xcoc-bootstrap.json
-sudoedit /root/xcoc-bootstrap.json
-sudo sh -c 'exec xcoc setup --input-stdin < /root/xcoc-bootstrap.json'
+sudo sh packaging/linux/install.sh
+sudo xcoc setup --interactive
 sudo xcoc status
 ```
 
-再发现摄像头，使用配对结果中的实例 ID 写入摄像头配置并核对。下方复制模板的命令仅适用于源码仓库根目录；公开 Release 压缩包不含 `config/`。从发行包安装时，先用 `sudo install -m 0600 /dev/null /root/xcoc-camera.json` 创建受保护文件，再按[配置指南中的 RTSP JSON](docs/configuration.md#3-rtsp-摄像头)填写，随后执行同一 `camera apply` 命令：
+安装会立即启动 systemd 服务，开机自启提示回车默认 Yes。先在 xcos 创建实例，再输入 HTTPS 地址、授权码并配置摄像头；授权码会在交互终端明文显示，不要把凭据写入命令参数或日志。
+
+Windows 使用 MSI 安装后运行 `xcoc setup --interactive`；macOS 手工安装 arm64 程序后运行 `xcoc setup --interactive` 和 `xcoc run`。移动应用需完成所有者签名才能实机安装：未签名 APK、AAB、IPA 或设备归档都不是可直接安装的正式包，模拟器 app 只适用于模拟器。
+
+## 如何编译部署
+
+桌面需要 Rust 1.99.0 和平台 C 工具链。Linux 还需 make、curl、pkg-config、Python 3、tar/xz、OpenSSL 开发静态库及 binutils；macOS 需 Xcode Command Line Tools、pkg-config、Python 3 和 xz。
 
 ```sh
-sudo xcoc camera discover --timeout-seconds 3
-sudo install -m 0600 config/camera.json.example /root/xcoc-camera.json
-sudoedit /root/xcoc-camera.json
-sudo sh -c 'exec xcoc camera apply --instance-id INSTANCE_UUID --input-stdin < /root/xcoc-camera.json'
-sudo xcoc camera list
-systemctl status xcoc.service
+bash packaging/native/build-unix.sh "$PWD/target/native-media"
+export PKG_CONFIG_PATH="$PWD/target/native-media/lib/pkgconfig"
+cargo +1.99.0 build --locked --release
+python3 packaging/native/check-runtime.py ./target/release/xcoc
 ```
 
-Bootstrap JSON、RTSP/ONVIF 样例、授权码轮换、热更新和故障定位见[完整配置指南](docs/configuration.md)。不要把摄像头密码、长期授权码或客户端 token 放进命令参数和日志。
+Linux 随后执行上面的安装命令；macOS 使用 `target/release/xcoc`。Windows 在装有 Visual Studio C++ Build Tools、Windows SDK、Python 3 和 Git 的 x64 Native Tools PowerShell 中执行：
 
-使用 `setup --interactive` 首次或替换配对时，实例授权码按普通文本输入并在终端中明文显示，不提供遮罩或
-隐藏切换；摄像头密码仍使用隐藏输入。摄像头 RTSP 凭据、发布地址中的媒体 JWT 与私有回环地址通过有界匿名管道传给内置媒体工作进程，不进入子进程命令参数、环境变量或临时凭据文件；原始媒体库日志不进入服务日志。服务端不会收到摄像头 URL。该设计不隔离拥有管理员权限或进程调试/内存读取权限的本机用户，仍须保护服务账户与配置。
-
-升级时会分别识别配对账户、摄像头配置和本地录像：不兼容账户要求显式重新配对并归档原文件；配置错误和无法识别的录像数据会明确报错且保持原样。
-
-## 开发验证
-
-先按[桌面媒体运行时构建说明](docs/media-worker.md)准备原生 FFmpeg 库、C 编译器与链接依赖；Android/iOS 目标不链接这些桌面库。
-
-```sh
-cargo +1.99.0 fmt --all -- --check
-cargo +1.99.0 clippy --locked --workspace --all-targets --all-features -- -D warnings
-cargo +1.99.0 test --locked --workspace --all-targets --all-features
+```powershell
+. .\packaging\native\build-windows.ps1 -WorkDirectory "$PWD\target\native-media"
+cargo +1.99.0 build --locked --release
+python packaging/native/check-runtime.py target/release/xcoc.exe
 ```
 
-## 文档
+Android 使用 JDK 17、Gradle 8.13、SDK 36、NDK r28+ 和 cargo-ndk 4.1.2；先添加 `aarch64-linux-android` Rust target，运行 `scripts/build-android-rust.sh`，再执行 `gradle -p clients/android assembleRelease bundleRelease`。iOS 在 macOS/Xcode 上运行 `scripts/build-ios-rust.sh`，用 XcodeGen 生成工程后配置自己的签名团队。完整平台构建、安装与签名步骤见下方文档。
 
-- [文档总览](docs/README.md)
-- [分平台部署、重新配对、启停与卸载](docs/platform-setup.md)
-- [完整配置指南](docs/configuration.md)
-- [运行与故障定位](docs/operations.md)
-- [桌面媒体运行时与构建依赖](docs/media-worker.md)
-- [摄像头兼容与协议转换](docs/camera-support.md)
-- [Android/iOS 原生客户端](docs/mobile.md)
-- [发行记录](docs/releases/)
-
-代码采用 [Apache License 2.0](LICENSE-APACHE)。
-
-## 仓库布局
-
-根 Rust 包提供桌面 CLI 与共享摄像头/移动媒体库，`crates/mobile-ffi` 提供 xcsc v1 原生桥接，
-`clients/android` 和 `clients/ios` 保存原生摄像头应用。`Cargo.lock` 固定工作区编译输入。
-`src/main/tests.rs` 和 `src/onvif/tests.rs` 验证客户端生命周期与 ONVIF；根 `tests/` 保存独立验收。
-`protocol/` 保存固定服务端源码的受控契约，`config/` 保存无凭据样例，`packaging/` 保存桌面安装器，
-`scripts/` 提供移动库构建，`docs/` 描述配置与运行。
-
-当前发布版本：**1.0.0**。参见 [1.0.0 发布说明](docs/releases/1.0.0.md)。
-
-公共支撑的职责、单体依赖、平台边界与验证方法见[公共支撑说明](docs/common-support.md)。
+[详细文档](https://github.com/isarmg/xcoc/blob/main/docs/README.md)

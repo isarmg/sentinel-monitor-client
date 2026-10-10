@@ -5,11 +5,14 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import plistlib
 import re
 import shutil
+import stat
 import struct
 import subprocess
+import tempfile
 import tomllib
 import zipfile
 from pathlib import Path
@@ -77,23 +80,107 @@ def check_android_manifest(text: str, version: str, code: int) -> None:
     require(fields.get("name") == APP_ID, "Unexpected Android application ID")
     require(fields.get("versionName") == version and fields.get("versionCode") == str(code),
             "Built APK version differs from release version")
-    require("sdkVersion:'26'" in text and "targetSdkVersion:'36'" in text,
-            "Unexpected Android SDK support boundary")
+    # Android build-tools 36 aapt2 names the minimum field minSdkVersion.
+    # Parse complete fields, never substrings in labels or other manifest data.
+    sdk_fields = {"minSdkVersion": [], "targetSdkVersion": []}
+    for line in text.splitlines():
+        match = re.fullmatch(r"\s*(minSdkVersion|targetSdkVersion):\s*'([^']*)'\s*", line)
+        if match:
+            sdk_fields[match[1]].append(match[2])
+        elif re.match(r"\s*(minSdkVersion|targetSdkVersion)\s*:", line):
+            raise ValueError("Malformed Android SDK field; expected exactly 26/36")
+    require(sdk_fields == {"minSdkVersion": ["26"], "targetSdkVersion": ["36"]},
+            "Unexpected Android SDK support boundary: "
+            f"minSdkVersion={sdk_fields['minSdkVersion']!r}, "
+            f"targetSdkVersion={sdk_fields['targetSdkVersion']!r}; expected exactly 26/36")
     require("application-debuggable" not in text, "A Debug APK cannot be released")
 
 
-def check_ios_app(app: Path, version: str, platform: str) -> None:
-    with (app / "Info.plist").open("rb") as stream:
-        info = plistlib.load(stream)
+def check_ios_info(info: dict, version: str, platform: str) -> None:
     require(info.get("CFBundleIdentifier") == APP_ID, "Unexpected iOS bundle identifier")
     require(info.get("CFBundleShortVersionString") == version and info.get("CFBundleVersion") == version,
             "Built iOS version differs from release version")
     require(info.get("CFBundleSupportedPlatforms") == [platform], "Wrong iOS device/simulator platform")
     require(info.get("MinimumOSVersion") == "16.0", "Unexpected iOS deployment target")
-    executable = info.get("CFBundleExecutable", "")
-    require(executable == "XcocCamera" and (app / executable).is_file(), "Missing iOS executable")
+    require(info.get("CFBundleExecutable") == "XcocCamera", "Unexpected iOS executable name")
+
+
+def check_ios_app(app: Path, version: str, platform: str) -> None:
+    with (app / "Info.plist").open("rb") as stream:
+        check_ios_info(plistlib.load(stream), version, platform)
+    require((app / "XcocCamera").is_file(), "Missing iOS executable")
     require(not (app / "_CodeSignature").exists() and not (app / "embedded.mobileprovision").exists(),
             "Expected an unsigned iOS application")
+
+
+
+def check_ios_binary(data: bytes) -> None:
+    require(len(data) >= 16 and data[:4] == b"\xcf\xfa\xed\xfe" and
+            struct.unpack_from("<I", data, 4)[0] == 0x0100000C and
+            struct.unpack_from("<I", data, 12)[0] == 2,
+            "IPA executable must be an arm64 Mach-O executable")
+
+
+def check_ios_ipa(path: Path, version: str) -> None:
+    prefix = "Payload/XcocCamera.app/"
+    with zipfile.ZipFile(path) as archive:
+        require(archive.testzip() is None, "IPA ZIP integrity check failed")
+        names = archive.namelist()
+        require(len(names) == len(set(names)), "IPA contains duplicate entries")
+        require(all(name.startswith(prefix) and ".." not in Path(name).parts for name in names),
+                "IPA must contain only Payload/XcocCamera.app")
+        require({prefix + "Info.plist", prefix + "XcocCamera"}.issubset(names), "IPA Payload is incomplete")
+        require(not any("_CodeSignature" in Path(name).parts or Path(name).name == "embedded.mobileprovision"
+                        for name in names), "Expected an unsigned IPA")
+        check_ios_info(plistlib.loads(archive.read(prefix + "Info.plist")), version, "iPhoneOS")
+        binary = archive.getinfo(prefix + "XcocCamera")
+        require(stat.S_ISREG(binary.external_attr >> 16) and (binary.external_attr >> 16) & 0o111 != 0,
+                "IPA executable must retain executable permissions")
+        with archive.open(binary) as stream:
+            check_ios_binary(stream.read(64))
+
+
+def package_ios_ipa(app: Path, output: Path, version: str) -> None:
+    require(app.name == "XcocCamera.app" and not app.is_symlink() and app.is_dir(),
+            "Expected the verified XcocCamera.app device bundle")
+    require(output.suffix == ".ipa", "IPA output must have the .ipa extension")
+    app = app.resolve()
+    require(not output.resolve().is_relative_to(app), "IPA output must be outside the app bundle")
+    check_ios_app(app, version, "iPhoneOS")
+    binary = app / "XcocCamera"
+    require(not binary.is_symlink() and binary.stat().st_mode & 0o111 != 0,
+            "IPA executable must retain executable permissions")
+    with binary.open("rb") as stream:
+        check_ios_binary(stream.read(64))
+    entries = [app, *sorted(app.rglob("*"))]
+    for entry in entries:
+        mode = entry.lstat().st_mode
+        require(entry.name not in ("_CodeSignature", "embedded.mobileprovision"), "Expected an unsigned IPA")
+        require(entry.suffix != ".a" or stat.S_ISDIR(mode), "Static libraries must be linked, not embedded")
+        if entry.is_symlink():
+            require(not os.path.isabs(os.readlink(entry)) and entry.resolve(strict=True).is_relative_to(app),
+                    "Bundle symlink points outside the application")
+        else:
+            require(stat.S_ISREG(mode) or stat.S_ISDIR(mode), "Unsupported special file in application bundle")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(suffix=".ipa", dir=output.parent)
+    os.close(descriptor)
+    temporary = Path(temporary_name)
+    try:
+        with zipfile.ZipFile(temporary, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+            for entry in entries:
+                name = "Payload/" + entry.relative_to(app.parent).as_posix()
+                if entry.is_symlink():
+                    record = zipfile.ZipInfo(name)
+                    record.create_system = 3
+                    record.external_attr = entry.lstat().st_mode << 16
+                    archive.writestr(record, os.fsencode(os.readlink(entry)))
+                else:
+                    archive.write(entry, name)
+        check_ios_ipa(temporary, version)
+        os.replace(temporary, output)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def checksum(path: Path) -> str:
@@ -117,7 +204,7 @@ def write_manifest(output: Path, platform: str, version: str, artifacts: list[Pa
             "Unsigned APK/AAB: requires the owner's release signing key before installation/distribution. "
             "An AAB is not directly installable."
             if platform == "android" else
-            "Unsigned device xcarchive: not an installable IPA; requires Apple signing and provisioning. "
+            "Unsigned device IPA and xcarchive: require Apple signing and provisioning before device installation. "
             "Simulator app runs only in an arm64 iOS Simulator, not on a device."
         ),
         "artifacts": {path.name: {"sha256": checksum(path), "bytes": path.stat().st_size} for path in artifacts},
@@ -135,6 +222,7 @@ def package_android(output: Path, aapt2: str) -> None:
         check_android_zip(path, bundle=bundle)
     badging = subprocess.check_output([aapt2, "dump", "badging", str(apk)], text=True)
     check_android_manifest(badging, version, code)
+    print(f"Verified Android manifest: {APP_ID} {version} ({code}), minSdkVersion=26, targetSdkVersion=36")
     artifacts = []
     for source, extension in ((apk, "apk"), (aab, "aab")):
         destination = output / f"xcoc-android-arm64-v8a-unsigned.{extension}"
@@ -159,6 +247,9 @@ def package_ios(output: Path, build: Path) -> None:
         # ditto preserves executable modes and archive layout for Xcode/Simulator.
         subprocess.run(["ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", str(source), str(destination)], check=True)
         artifacts.append(destination)
+    ipa = output / "xcoc-ios-arm64-unsigned.ipa"
+    package_ios_ipa(device_app, ipa, version)
+    artifacts.append(ipa)
     write_manifest(output, "ios", version, artifacts)
 
 
